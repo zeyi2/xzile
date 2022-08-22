@@ -3,7 +3,7 @@ GNU Zile
 
 GNU Zile is free software, licensed under the GNU GPL.
 
-Copyright (c) 1997-2016 Free Software Foundation, Inc.
+Copyright (c) 1997-2022 Free Software Foundation, Inc.
 
 **Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright
@@ -11,7 +11,7 @@ notice and this notice are preserved.**
 
 _This file is marked up in [MultiMarkdown][] syntax_.
 
-  [MultiMarkdown]: http://fletcherpenney.net/multimarkdown
+  [MultiMarkdown]: https://fletcherpenney.net/multimarkdown
 
 ------------------------------------------------------------------------
 
@@ -69,7 +69,7 @@ The rest of the files in the top-level directory are part of the
  * Directory `tests` contains a small suite of tests used by
    `make check` to sanity check a newly built `src/zile` binary.
 
-  [Autotools]: http://sourceware.org/autobook/
+  [Autotools]: https://sourceware.org/autobook/
 
 
 Web Pages
@@ -77,26 +77,26 @@ Web Pages
 
 GNU Zile's home page is at:
 
-  > <http://www.gnu.org/s/zile/>
+  > <https://www.gnu.org/s/zile/>
 
 GNU Zile development is co-ordinated from Zile's project page at GNU
 Savannah:
 
-  > <http://savannah.gnu.org/projects/zile/>
+  > <https://savannah.gnu.org/projects/zile/>
 
 An archive of past releases is also archived at:
 
-  > <http://ftp.gnu.org/gnu/zile/>
+  > <https://ftp.gnu.org/gnu/zile/>
 
 But please use a mirror for faster downloads and to reduce stress on the
 main gnu machine. The following link will automatically redirect to a
-nearest mirror:
+nearby mirror:
 
-  > <http://ftpmirror.gnu.org/zile/>
+  > <https://ftpmirror.gnu.org/zile/>
 
 Or you can manually select a mirror from the list at:
 
-  > <http://www.gnu.org/order/ftp.html>
+  > <https://www.gnu.org/order/ftp.html>
 
 
 Mailing Lists
@@ -125,20 +125,20 @@ Official Release
 
 Compressed tarballs of all recent GNU Zile releases are available from:
 
-  > <http://ftpmirror.gnu.org/zile>
+  > <https://ftpmirror.gnu.org/zile>
 
 Compressed tarballs of unstable prereleases are sometimes made available
 from:
 
-  > <ftp://alpha.gnu.org/gnu/zile>
+  > <https://alpha.gnu.org/gnu/zile>
 
 Official tarballs are supplied with a [GnuPG][] detached signature file
 so that you can verify that the corresponding tarball is still the same
 file that was released by the owner of its GPG key ID. First, be sure to
 download both the .sig file and the corresponding release:
 
-    wget http://ftpmirror.gnu.org/zile/zile-2.3.24.tar.gz
-    wget http://ftpmirror.gnu.org/zile/zile-2.3.24.tar.gz.sig
+    wget https://ftpmirror.gnu.org/zile/zile-2.3.24.tar.gz
+    wget https://ftpmirror.gnu.org/zile/zile-2.3.24.tar.gz.sig
 
 then run a command like this:
 
@@ -163,8 +163,8 @@ If you are missing any of the prerequisite libraries needed to
 successfully build GNU Zile, the `configure` script will abort itself
 and tell you right away.
 
-  [GnuPG]:    http://www.gnupg.org/
-  [PDcurses]: http://pdcurses.sf.ne
+  [GnuPG]:    https://www.gnupg.org/
+  [PDcurses]: https://pdcurses.org/
 
 
 Development Sources
@@ -183,7 +183,7 @@ everything ready so that you can then run `./configure` as would for a
 release tarball, or else tell you if your machine is missing some
 packages that it needs in order to do that.
 
-  [gitbrowser]: http://git.sv.gnu.org/cgit/zile.git
+  [gitbrowser]: https://git.sv.gnu.org/cgit/zile.git
 
 Zile is written in Vala; to build it you need valac version 0.52 or later,
 glib 2.0 and libgee.
@@ -200,11 +200,11 @@ exhibit the problem (see [OBTAINING THE LATEST SOURCES][] above).
 
 Please send bug reports, feature requests and patches to
 <bug-zile@gnu.org> or, preferably, file them directly in the relevant
-tracker at <http://savannah.gnu.org/projects/zile/>.
+tracker at <https://savannah.gnu.org/projects/zile/>.
 
 When you are ready to submit a report, first, please read this:
 
-  > <http://www.chiark.greenend.org.uk/~sgtatham/bugs.html>
+  > <https://www.chiark.greenend.org.uk/~sgtatham/bugs.html>
 
 Zile has a suite of Lisp tests in the tests directory of the source
 distribution, which you can run with:

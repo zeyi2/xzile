@@ -93,7 +93,7 @@ INDEX
     In general, if you need something more powerful, use Emacs. You
     could also try Jed, which emulates Emacs, is not much bigger than
     Zile, and has syntax highlighting, a macro language and more
-    (http://www.jedsoft.org/jed/).
+    (https://www.jedsoft.org/jed/).
 
     If you still think that a certain function should be implemented
     in Zile, please send a message to the developers (see question
