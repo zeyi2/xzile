@@ -39,11 +39,11 @@ dnl help2man
 dnl Set a value even if not found, so that an invocation via build-aux/missing works
 AC_PATH_PROG([HELP2MAN], [help2man], [help2man])
 
-dnl Checks for functions and headers
-AC_HEADER_STDC
 # Force use of included (patched) regex
 AC_MSG_WARN([Forcing --with-included-regex, to use our patched version])
 with_included_regex=yes
+
+# Initialize gnulib
 gl_INIT
 
 dnl Curses
