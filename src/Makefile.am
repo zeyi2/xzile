@@ -21,8 +21,8 @@ doc_DATA += src/dotzile.sample
 
 AM_VALAFLAGS = --debug --no-color --vapidir=$(srcdir)/src
 AM_CFLAGS = --include config.h $(WARN_CFLAGS) $(GLIB_CFLAGS)
-AM_CPPFLAGS = -I$(builddir)/src -I$(srcdir)/src -I$(builddir)/lib -I$(srcdir)/lib -DPATH_DOCDIR="\"$(docdir)\""
-LDADD = $(builddir)/lib/libgnu.a $(LIB_EACCESS) $(LIBINTL) $(CURSES_LIB) $(GLIB_LIBS)
+AM_CPPFLAGS = -I$(builddir)/src -I$(srcdir)/src -I$(builddir)/lib -I$(srcdir)/lib -DPATH_DOCDIR="\"$(docdir)\"" $(CURSES_CFLAGS)
+LDADD = $(builddir)/lib/libgnu.a $(LIB_EACCESS) $(LIBINTL) $(CURSES_LIBS) $(GLIB_LIBS)
 
 VAPIS =	src/config.vapi
 

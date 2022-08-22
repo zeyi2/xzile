@@ -154,10 +154,10 @@ and then rerun the `gpg --verify' command.
 Generic instructions for how to build GNU Zile from a release tarball
 are contained in the file `INSTALL`. Additionally, If you wish to use a
 non-standard curses library name, this can be specified using
-`CURSES_LIB` and `CPPFLAGS`. For example, to use the X version of
-[PDcurses][]:
+`CURSES_LIBS` and `CURSES_CPPFLAGS`. For example, to use the X version
+of [PDcurses][]:
 
-    CPPFLAGS=/usr/local/include/xcurses CURSES_LIB=-lXCurses ./configure
+    CPPFLAGS=/usr/local/include/xcurses CURSES_LIBS=-lXCurses ./configure
 
 If you are missing any of the prerequisite libraries needed to
 successfully build GNU Zile, the `configure` script will abort itself
