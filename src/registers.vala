@@ -1,6 +1,6 @@
 /* Registers facility functions
 
-   Copyright (c) 2001-2020 Free Software Foundation, Inc.
+   Copyright (c) 2001-2022 Free Software Foundation, Inc.
 
    This file is part of GNU Zile.
 
@@ -17,9 +17,8 @@
    You should have received a copy of the GNU General Public License
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
-int NUM_REGISTERS = 256;
-/* FIXME: (fixed in Vala 0.56) https://gitlab.gnome.org/GNOME/vala/-/issues/440 */
-ImmutableEstr regs[256 /* NUM_REGISTERS */];
+const int NUM_REGISTERS = 256;
+ImmutableEstr regs[NUM_REGISTERS];
 
 long regnum;
 
