@@ -34,15 +34,15 @@ INTRODUCTION
 
 GNU Zile (_Zile Is Lossy Emacs_) is a lightweight [Emacs][] clone. Every
 Emacs user should feel at home with Zile. Zile is aimed at small
-footprint systems (a typical binary is about 100Kb) and quick editing
+footprint systems (a typical binary is about 300Kb) and quick editing
 sessions (it starts up and shuts down instantly).
 
-Zile is written in **ISO C99** using **POSIX.1-2008** APIs, and [libgc][].
+Zile is written in **[Vala][]** using **POSIX.1-2008** APIs.
 It can be built on many other platforms thanks to its use of [gnulib][].
 
-  [Emacs]:   http://www.gnu.org/s/emacs
-  [libgc]:   http://www.hpl.hp.com/personal/Hans_Boehm/gc
-  [gnulib]:  http://www.gnu.org/s/gnulib
+  [Vala]:    https://vala.dev
+  [Emacs]:   https://www.gnu.org/s/emacs
+  [gnulib]:  https://www.gnu.org/s/gnulib
 
 
 Source Layout
