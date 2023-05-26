@@ -78,7 +78,3 @@ distcheck-hook: syntax-check
 dorelease:
 	git push origin master tag v$$(cat .prev-version)
 	woger gnu
-
-## An empty target to depend on when a rule needs to always run
-## whenever it is visited.
-.FORCE:
