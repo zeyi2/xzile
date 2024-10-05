@@ -1,5 +1,4 @@
 *.c
-!memrmem.c
 .dirstamp
 estr.vapi
 estr.h
