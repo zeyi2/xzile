@@ -50,6 +50,7 @@ PRODUCTIONSOURCES =					\
 	doc/Makefile.am					\
 	src/Makefile.am					\
 	$(src_zile_SOURCE_FILES)			\
+	$(src_libestr_a_SOURCES)			\
 	$(VAPIS)
 
 loc:
