@@ -42,10 +42,7 @@ noinst_LIBRARIES = src/libestr.a
 src_libestr_a_SOURCES = src/estr.vala
 src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library estr --header src/estr.h --vapi=src/estr.vapi
 
-# The following rule is copied from that generated for src/estr.c, with an
-# extra mv to put the output in the right place, because passing --output to
-# valac causes it to write estr.c in a subdirectory. (It would prefer a
-# recursive build system!)
+# The following rule is adapted from that generated for src/estr.c.
 $(srcdir)/src/estr.vapi: $(srcdir)/src_libestr_a_vala.stamp
 	@if test -f $@; then :; else rm -f $(srcdir)/src_libestr_a_vala.stamp; fi
 	@if test -f $@; then :; else \
