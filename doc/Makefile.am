@@ -20,7 +20,7 @@
 edit = sed \
 	-e 's|@docdir[@]|$(docdir)|g'
 
-MAINTAINERCLEANFILES += $(srcdir)/doc/zile.1.in doc/zile.1
+MAINTAINERCLEANFILES += $(srcdir)/doc/zile.1.in
 DISTCLEANFILES += doc/zile.1
 EXTRA_DIST += doc/man-extras doc/zile.1.in
 man_MANS = doc/zile.1
