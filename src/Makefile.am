@@ -40,14 +40,7 @@ bin_PROGRAMS = src/zile
 
 noinst_LIBRARIES = src/libestr.a
 src_libestr_a_SOURCES = src/estr.vala
-src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library estr --header src/estr.h --vapi=src/estr.vapi
-
-# The following rule is adapted from that generated for src/estr.c.
-$(srcdir)/src/estr.vapi: $(srcdir)/src_libestr_a_vala.stamp
-	@if test -f $@; then :; else rm -f $(srcdir)/src_libestr_a_vala.stamp; fi
-	@if test -f $@; then :; else \
-	  $(MAKE) $(AM_MAKEFLAGS) $(srcdir)/src_libestr_a_vala.stamp; \
-	fi
+src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library src/estr --header src/estr.h --vapi=src/estr.vapi
 
 src_zile_VALAFLAGS = $(AM_VALAFLAGS) -D _REGEX_LARGE_OFFSETS --pkg config --pkg gee-0.8 --pkg gio-2.0 --pkg posix --pkg curses --pkg gnu --pkg estr
 src_zile_LDADD = $(LDADD) $(LIBOBJS) src/libestr.a
