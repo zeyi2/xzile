@@ -2,6 +2,11 @@ GNU Zile NEWS                                         -*- outline -*-
 
 * Noteworthy changes in release ?.? (????-??-??) [?]
 
+** Miscellaneous
+
+  This release fixes the build on systems that may need more replacements
+  libc functions than a typical GNU system, such as Microsoft Windows. There
+  are some minor updates to the build system.
 
 * Noteworthy changes in release 2.6.2 (2021-05-04) [stable]
 
