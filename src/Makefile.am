@@ -43,7 +43,7 @@ src_libestr_a_SOURCES = src/estr.vala
 src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library src/estr --header src/estr.h --vapi=src/estr.vapi
 
 src_zile_VALAFLAGS = $(AM_VALAFLAGS) -D _REGEX_LARGE_OFFSETS --pkg config --pkg gee-0.8 --pkg gio-2.0 --pkg posix --pkg curses --pkg gnu --pkg estr
-src_zile_LDADD = $(LDADD) $(LIBOBJS) src/libestr.a
+src_zile_LDADD = $(LIBOBJS) src/libestr.a $(LDADD)
 
 src_zile_SOURCE_FILES =					\
 	src/basic.vala					\
