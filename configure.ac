@@ -20,7 +20,7 @@
 AC_PREREQ([2.69])
 
 # Initialise autoconf and automake
-AC_INIT([Zile],[2.6.2],[bug-zile@gnu.org])
+AC_INIT([Zile],[2.6.3],[bug-zile@gnu.org])
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE([-Wall std-options])
 
