@@ -2,6 +2,15 @@ GNU Zile NEWS                                         -*- outline -*-
 
 * Noteworthy changes in release ?.? (????-??-??) [?]
 
+** Bug fixes
+
+   This release fixes reading files larger than 2GB, and writing files where
+   the operating system divides the writing into multiple chunks (in
+   practice, probably also files longer than 2GB). Previously, the amount of
+   data read was subject to integer overflow, and the wrong data (both in
+   content and size) was written when it was written in multiple passes.
+   I’ve never had a bug report about this, but apologies to anyone who ran
+   into it!
 
 * Noteworthy changes in release 2.6.3 (2025-03-11) [stable]
 
