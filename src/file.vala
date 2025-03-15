@@ -163,7 +163,7 @@ bool find_file (string filename) {
 int write_all (int fd, char *data, size_t length)
 {
 	for (size_t tot_written = 0; tot_written < length; ) {
-		ssize_t written = write (fd, data, length);
+		ssize_t written = write (fd, data + tot_written, length - tot_written);
 		if (written < 0)
 			return (int) written;
 		if (written == 0)
