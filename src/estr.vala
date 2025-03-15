@@ -250,9 +250,10 @@ public class Estr : ImmutableEstr {
 
 	public static Estr from_file (string filename) throws Error {
 		string s;
-		FileUtils.get_contents (filename, out s);
+		size_t length;
+		FileUtils.get_contents (filename, out s, out length);
 		var es = new Estr ();
-		es.length = s.length;
+		es.length = length;
 		es.text = (owned) s;
 		es.set_eol_from_text ();
 		return es;
