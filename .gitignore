@@ -24,7 +24,6 @@ config.status
 config.status.lineno
 configure
 configure.lineno
-cyclo-zile.html
 dotzile.sample
 src_*_vala.stamp*
 stamp-h
