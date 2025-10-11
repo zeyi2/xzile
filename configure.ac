@@ -26,7 +26,7 @@ AM_INIT_AUTOMAKE([-Wall std-options])
 
 # Checks for programs
 gl_EARLY
-AM_PROG_CC_C_O
+AC_PROG_CC
 AM_PROG_AR
 PKG_PROG_PKG_CONFIG
 AX_CHECK_GNU_MAKE(,[AC_MSG_WARN([GNU make is required to build from Vala sources])])
