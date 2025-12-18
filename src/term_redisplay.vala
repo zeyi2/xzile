@@ -1,15 +1,16 @@
 /* Redisplay engine
 
    Copyright (c) 1997-2020 Free Software Foundation, Inc.
+   Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 
-   This file is part of GNU Zile.
+   This file is part of XZile.
 
-   GNU Zile is free software; you can redistribute it and/or modify it
+   XZile is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3, or (at your option)
    any later version.
 
-   GNU Zile is distributed in the hope that it will be useful, but
+   XZile is distributed in the hope that it will be useful, but
    WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
    General Public License for more details.
@@ -31,9 +32,9 @@ string make_char_printable (char c, size_t x, size_t cur_tab_width) {
 		return "\\%o".printf (c & 0xff);
 }
 
-void draw_line (size_t line, size_t startcol, Window wp,
+void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 				size_t o, Region? r, bool highlight, size_t cur_tab_width) {
-	term_move (line, 0);
+	term_move (line, leftcol);
 
 	/* Draw body of line. */
 	size_t x, i, line_len = wp.bp.line_len (o);
@@ -53,8 +54,8 @@ void draw_line (size_t line, size_t startcol, Window wp,
     }
 
 	/* Draw end of line. */
-	if (x >= term_width ()) {
-		term_move (line, term_width () - 1);
+	if (x >= wp.ewidth) {
+		term_move (line, leftcol + wp.ewidth - 1);
 		term_attrset (FONT_NORMAL);
 		term_addstr ("$");
     } else
@@ -98,10 +99,10 @@ string make_screen_pos (Window wp) {
 		return "%2d%%".printf((int) ((float) 100.0 * wp.o () / wp.bp.length));
 }
 
-static void draw_status_line (size_t line, Window wp) {
+static void draw_status_line (size_t line, size_t leftcol, Window wp) {
 	term_attrset (FONT_REVERSE);
 
-	term_move (line, 0);
+	term_move (line, leftcol);
 	for (size_t i = 0; i < wp.ewidth; ++i)
 		term_addstr ("-");
 
@@ -113,7 +114,7 @@ static void draw_status_line (size_t line, Window wp) {
 	else
 		eol_type = ":";
 
-	term_move (line, 0);
+	term_move (line, leftcol);
 	size_t n = wp.bp.offset_to_line (wp.o ());
 	string a = "--%s%2s  %-15s   %s %-9s (Fundamental".printf (
 		eol_type, make_mode_line_flags (wp), wp.bp.name,
@@ -135,7 +136,7 @@ static void draw_status_line (size_t line, Window wp) {
 	term_attrset (FONT_NORMAL);
 }
 
-void draw_window (size_t topline, Window wp) {
+void draw_window (size_t topline, size_t leftcol, Window wp) {
 	size_t i, o;
 	Region? r;
 	bool highlight = calculate_highlight_region (wp, out r);
@@ -149,18 +150,18 @@ void draw_window (size_t topline, Window wp) {
 	/* Draw the window lines. */
 	size_t cur_tab_width = wp.bp.tab_width ();
 	for (i = topline; i < wp.eheight + topline; ++i) {
-		/* Clear the line. */
-		term_move (i, 0);
-		term_clrtoeol ();
+		term_move (i, leftcol);
 
 		/* If at the end of the buffer, don't write any text. */
-		if (o == size_t.MAX)
+		if (o == size_t.MAX) {
+			term_addstr ("%*s".printf ((int) wp.ewidth, ""));
 			continue;
+		}
 
-		draw_line (i, wp.start_column, wp, o, r, highlight, cur_tab_width);
+		draw_line (i, leftcol, wp.start_column, wp, o, r, highlight, cur_tab_width);
 
 		if (wp.start_column > 0) {
-			term_move (i, 0);
+			term_move (i, leftcol);
 			term_addstr("$");
         }
 
@@ -172,13 +173,25 @@ void draw_window (size_t topline, Window wp) {
 	/* Draw the status line only if there is available space after the
 	   buffer text space. */
 	if (wp.fheight - wp.eheight > 0)
-		draw_status_line (topline + wp.eheight, wp);
+		draw_status_line (topline + wp.eheight, leftcol, wp);
+
+	if (wp.fwidth > wp.ewidth) {
+		size_t sep_col = leftcol + wp.ewidth;
+		for (size_t row = topline; row < topline + wp.fheight; ++row) {
+			term_move (row, sep_col);
+			term_attrset (FONT_NORMAL);
+			term_addstr ("| ");
+		}
+	}
 }
 
 size_t col;
 size_t cur_topline = 0;
+size_t cur_leftcol = 0;
 
 public void term_redisplay () {
+	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
+
 	/* Calculate the start column if the line at point has to be truncated. */
 	Buffer bp = cur_wp.bp;
 	size_t lastcol = 0, t = bp.tab_width ();
@@ -190,6 +203,9 @@ public void term_redisplay () {
 	cur_wp.start_column = 0;
 
 	size_t ew = cur_wp.ewidth;
+	size_t step = (ew / 3);
+	if (step == 0) step = 1;
+
 	for (size_t lp = lineo; lp != size_t.MAX; --lp) {
 		col = 0;
 		for (size_t p = lp; p < lineo; ++p) {
@@ -200,7 +216,7 @@ public void term_redisplay () {
 				col += make_char_printable (bp.get_char (o + p), col, t).length;
         }
 
-		if (col >= ew - 1 || (lp / (ew / 3)) + 2 < lineo / (ew / 3)) {
+		if (col >= ew - 1 || (lp / step) + 2 < lineo / step) {
 			cur_wp.start_column = lp + 1;
 			col = lastcol;
 			break;
@@ -211,21 +227,20 @@ public void term_redisplay () {
 
 	/* Draw the windows. */
 	cur_topline = 0;
-	size_t topline = 0;
-	for (Window wp = head_wp; wp != null; wp = wp.next) {
-		if (wp == cur_wp)
-			cur_topline = topline;
-
-		draw_window (topline, wp);
-
-		topline += wp.fheight;
-    }
+	root_node.each_leaf ((leaf) => {
+		Window wp = leaf.wp;
+		draw_window (leaf.y, leaf.x, wp);
+		if (wp == cur_wp) {
+			cur_topline = leaf.y;
+			cur_leftcol = leaf.x;
+		}
+	});
 
 	term_redraw_cursor ();
 }
 
 void term_redraw_cursor () {
-	term_move (cur_topline + cur_wp.topdelta, col);
+	term_move (cur_topline + cur_wp.topdelta, cur_leftcol + col);
 }
 
 /*

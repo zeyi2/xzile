@@ -1,15 +1,16 @@
 # Produce dotzile.sample
 #
 # Copyright (c) 1997-2020 Free Software Foundation, Inc.
+# Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 #
-# This file is part of GNU Zile.
+# This file is part of XZile.
 #
-# GNU Zile is free software; you can redistribute it and/or modify it
+# XZile is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3, or (at your option)
 # any later version.
 #
-# GNU Zile is distributed in the hope that it will be useful, but
+# XZile is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # General Public License for more details.
@@ -46,6 +47,7 @@
   "end-of-buffer" => ["\\M->"],
   "end-of-line" => ["\\END", "\\C-e"],
   "enlarge-window" => ["\\C-x^"],
+  "enlarge-window-horizontally" => ["\\C-x}"],
   "exchange-point-and-mark" => ["\\C-x\\C-x"],
   "execute-extended-command" => ["\\M-x"],
   "fill-paragraph" => ["\\M-q"],
@@ -94,7 +96,9 @@
   "set-mark-command" => ["\\C-@"],
   "shell-command" => ["\\M-!"],
   "shell-command-on-region" => ["\\M-|"],
+  "shrink-window-horizontally" => ["\\C-x{"],
   "split-window" => ["\\C-x2"],
+  "split-window-right" => ["\\C-x3"],
   "start-kbd-macro" => ["\\C-x("],
   "suspend-emacs" => ["\\C-x\\C-z", "\\C-z"],
   "switch-to-buffer" => ["\\C-xb"],

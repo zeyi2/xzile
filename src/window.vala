@@ -1,15 +1,16 @@
 /* Window handling functions
 
    Copyright (c) 1997-2020 Free Software Foundation, Inc.
+   Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 
-   This file is part of GNU Zile.
+   This file is part of XZile.
 
-   GNU Zile is free software; you can redistribute it and/or modify it
+   XZile is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3, or (at your option)
    any later version.
 
-   GNU Zile is distributed in the hope that it will be useful, but
+   XZile is distributed in the hope that it will be useful, but
    WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
    General Public License for more details.
@@ -37,6 +38,7 @@ public class Window {
 	public size_t fheight;
 	public size_t ewidth;	/* The effective width and height of the window. */
 	public size_t eheight;
+	public size_t xpos;
 	public bool all_displayed; /* The bottom of the buffer is visible */
 	internal size_t lastpointn;		/* The last point line number. */
 
@@ -123,14 +125,55 @@ public class Window {
 				}
 
 		if (wp != null) {
-			wp.fheight += this.fheight;
-			wp.eheight += this.eheight + 1;
 			wp.set_current ();
 		}
 
 		if (this.saved_pt != null)
 			this.saved_pt.unchain ();
 	}
+}
+
+void wm_split (Window wp, SplitKind kind) {
+	/* Copy cur_wp. */
+	Window newwp = new Window ();
+	newwp.next = wp.next;
+	newwp.bp = wp.bp;
+	newwp.topdelta = wp.topdelta;
+	newwp.start_column = wp.start_column;
+	newwp.saved_pt = wp.saved_pt;
+	newwp.fwidth = wp.fwidth;
+	newwp.fheight = wp.fheight;
+	newwp.ewidth = wp.ewidth;
+	newwp.eheight = wp.eheight;
+	newwp.all_displayed = wp.all_displayed;
+	newwp.lastpointn = wp.lastpointn;
+	newwp.saved_pt = Marker.point ();
+
+	/* Adjust cur_wp. */
+	wp.next = newwp;
+
+	LeafNode leaf = find_leaf_for (wp);
+	if (leaf != null)
+		replace_leaf_with_split (leaf, kind, wp, newwp);
+}
+
+void wm_split_rows (Window wp) {
+	wm_split (wp, SplitKind.Rows);
+	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
+	if (wp.topdelta >= wp.eheight)
+		recenter (wp);
+}
+
+void wm_split_cols (Window wp) {
+	wm_split (wp, SplitKind.Cols);
+	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
+}
+
+void wm_delete (Window wp) {
+	LeafNode leaf = find_leaf_for (wp);
+	if (leaf != null)
+		remove_leaf_and_promote_sibling (leaf);
+	wp.delete ();
 }
 
 /*
@@ -147,6 +190,7 @@ public void create_scratch_window () {
 	/* Save space for status line. */
 	wp.eheight = wp.fheight - 1;
 	wp.bp = cur_bp = bp;
+	root_node = new LeafNode (wp);
 }
 
 Window popup_window () {
@@ -172,36 +216,31 @@ public void window_init () {
 				return false;
 			}
 
-			/* Copy cur_wp. */
-			Window newwp = new Window ();
-			newwp.next = cur_wp.next;
-			newwp.bp = cur_wp.bp;
-			newwp.topdelta = cur_wp.topdelta;
-			newwp.start_column = cur_wp.start_column;
-			newwp.saved_pt = cur_wp.saved_pt;
-			newwp.fwidth = cur_wp.fwidth;
-			newwp.fheight = cur_wp.fheight;
-			newwp.ewidth = cur_wp.ewidth;
-			newwp.eheight = cur_wp.eheight;
-			newwp.all_displayed = cur_wp.all_displayed;
-			newwp.lastpointn = cur_wp.lastpointn;
-
-			/* Adjust new window. */
-			newwp.fheight = cur_wp.fheight / 2 + cur_wp.fheight % 2;
-			newwp.eheight = newwp.fheight - 1;
-			newwp.saved_pt = Marker.point ();
-
-			/* Adjust cur_wp. */
-			cur_wp.next = newwp;
-			cur_wp.fheight = cur_wp.fheight / 2;
-			cur_wp.eheight = cur_wp.fheight - 1;
-			if (cur_wp.topdelta >= cur_wp.eheight)
-				recenter (cur_wp);
+			wm_split_rows (cur_wp);
 
 			return true;
 		},
 		true,
 		"""Split current window into two windows, one above the other.
+		Both windows display the same buffer now current."""
+		);
+
+	new LispFunc (
+		"split-window-right",
+		(uniarg, args) => {
+			/* Windows smaller than 4 columns cannot be split. */
+			if (cur_wp.fwidth < 4) {
+				Minibuf.error ("Window width %zu too small (after splitting)",
+							   cur_wp.fwidth);
+				return false;
+			}
+
+			wm_split_cols (cur_wp);
+
+			return true;
+		},
+		true,
+		"""Split current window into two windows, side by side.
 		Both windows display the same buffer now current."""
 		);
 
@@ -213,7 +252,7 @@ public void window_init () {
 				return false;
 			}
 
-			cur_wp.delete ();
+			wm_delete (cur_wp);
 			return true;
 		},
 		true,
@@ -223,26 +262,8 @@ public void window_init () {
 	new LispFunc (
 		"enlarge-window",
 		(uniarg, args) => {
-			if (cur_wp == head_wp && (cur_wp.next == null || cur_wp.next.fheight < 3))
+			if (!resize_window_layout (cur_wp, (int) uniarg, true))
 				return false;
-
-			Window wp = cur_wp.next;
-			if (wp == null || wp.fheight < 3)
-				for (wp = head_wp; wp != null; wp = wp.next)
-					if (wp.next == cur_wp) {
-						if (wp.fheight < 3)
-							return false;
-						break;
-					}
-
-			assert (wp != null);
-			--wp.fheight;
-			--wp.eheight;
-			if (wp.topdelta >= wp.eheight)
-				recenter (wp);
-			++cur_wp.fheight;
-			++cur_wp.eheight;
-
 			return true;
 		},
 		true,
@@ -252,27 +273,34 @@ public void window_init () {
 	new LispFunc (
 		"shrink-window",
 		(uniarg, args) => {
-			if ((cur_wp == head_wp && cur_wp.next == null) || cur_wp.fheight < 3)
+			if (!resize_window_layout (cur_wp, (int) (-uniarg), true))
 				return false;
-
-			Window wp = cur_wp.next;
-			if (wp == null)
-				for (wp = head_wp; wp != null; wp = wp.next)
-					if (wp.next == cur_wp)
-						break;
-
-			assert (wp != null);
-			++wp.fheight;
-			++wp.eheight;
-			--cur_wp.fheight;
-			--cur_wp.eheight;
-			if (cur_wp.topdelta >= cur_wp.eheight)
-				recenter (cur_wp);
-
 			return true;
 		},
 		true,
 		"""Make current window one line smaller."""
+		);
+
+	new LispFunc (
+		"enlarge-window-horizontally",
+		(uniarg, args) => {
+			if (!resize_window_layout (cur_wp, (int) uniarg, false))
+				return false;
+			return true;
+		},
+		true,
+		"""Make current window one column wider."""
+		);
+
+	new LispFunc (
+		"shrink-window-horizontally",
+		(uniarg, args) => {
+			if (!resize_window_layout (cur_wp, (int) (-uniarg), false))
+				return false;
+			return true;
+		},
+		true,
+		"""Make current window one column narrower."""
 		);
 
 	new LispFunc (
@@ -281,7 +309,7 @@ public void window_init () {
 			for (Window wp = head_wp, nextwp = null; wp != null; wp = nextwp) {
 				nextwp = wp.next;
 				if (wp != cur_wp)
-					wp.delete ();
+					wm_delete (wp);
 			}
 			return true;
 		},

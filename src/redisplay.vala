@@ -1,15 +1,16 @@
 /* Terminal independent redisplay routines
 
    Copyright (c) 1997-2020 Free Software Foundation, Inc.
+   Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 
-   This file is part of GNU Zile.
+   This file is part of XZile.
 
-   GNU Zile is free software; you can redistribute it and/or modify it
+   XZile is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3, or (at your option)
    any later version.
 
-   GNU Zile is distributed in the hope that it will be useful, but
+   XZile is distributed in the hope that it will be useful, but
    WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
    General Public License for more details.
@@ -17,50 +18,24 @@
    You should have received a copy of the GNU General Public License
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
+public size_t get_main_window_height () {
+	size_t mb_h = Minibuf.get_height ();
+	size_t main_h = term_height () - mb_h;
+	if (main_h < 1) main_h = 1;
+	return main_h;
+}
+
 public void resize_windows () {
-	/* Resize windows horizontally. */
-	Window wp;
-	for (wp = head_wp; wp != null; wp = wp.next)
-		wp.ewidth = wp.fwidth = term_width ();
+	bool repeat = true;
+	while (repeat) {
+		repeat = false;
+		Window? to_delete = update_windows_geometry (0, 0, term_width (), get_main_window_height ());
 
-	/* Work out difference in window height; windows may be taller than
-	   terminal if the terminal was very short. */
-	int hdelta;
-	for (hdelta = (int) term_height () - 1, wp = head_wp;
-		 wp != null;
-		 hdelta -= (int) wp.fheight, wp = wp.next)
-		;
-
-	/* Resize windows vertically. */
-	if (hdelta > 0) { /* Increase windows height. */
-		for (wp = head_wp; hdelta > 0; wp = wp.next) {
-			if (wp == null)
-				wp = head_wp;
-			assert (wp != null);
-			++wp.fheight;
-			++wp.eheight;
-			--hdelta;
-        }
-    } else { /* Decrease windows' height, and close windows if necessary. */
-		for (bool decreased = true; decreased;) {
-			decreased = false;
-			for (wp = head_wp; wp != null && hdelta < 0; wp = wp.next) {
-				if (wp.fheight > 2) {
-					--wp.fheight;
-					--wp.eheight;
-					++hdelta;
-					decreased = true;
-                } else if (cur_wp != head_wp || cur_wp.next != null) {
-					Window new_wp = wp.next;
-					wp.delete ();
-					wp = new_wp;
-					assert (wp != null);
-					decreased = true;
-                }
-            }
-        }
-    }
-
+		if (to_delete != null && head_wp.next != null) {
+			wm_delete (to_delete);
+			repeat = true;
+		}
+	}
 	funcall ("recenter");
 }
 

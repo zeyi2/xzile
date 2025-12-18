@@ -1,15 +1,16 @@
 # Source Makefile.am
 #
 # Copyright (c) 1997-2020 Free Software Foundation, Inc.
+# Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 #
-# This file is part of GNU Zile.
+# This file is part of XZile.
 #
-# GNU Zile is free software; you can redistribute it and/or modify it
+# XZile is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3, or (at your option)
 # any later version.
 #
-# GNU Zile is distributed in the hope that it will be useful, but
+# XZile is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # General Public License for more details.
@@ -58,6 +59,7 @@ src_zile_SOURCE_FILES =					\
 	src/getkey.vala					\
 	src/history.vala				\
 	src/keycode.vala				\
+	src/layout.vala					\
 	src/line.vala					\
 	src/lisp.vala					\
 	src/macro.vala					\
