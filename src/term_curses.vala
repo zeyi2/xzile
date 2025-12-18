@@ -1,15 +1,16 @@
 /* Curses terminal
 
    Copyright (c) 1997-2021 Free Software Foundation, Inc.
+   Copyright (c) 2025 Zeyi2 <zeyi2@nekoarch.cc>
 
-   This file is part of GNU Zile.
+   This file is part of XZile.
 
-   GNU Zile is free software; you can redistribute it and/or modify it
+   XZile is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3, or (at your option)
    any later version.
 
-   GNU Zile is distributed in the hope that it will be useful, but
+   XZile is distributed in the hope that it will be useful, but
    WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
    General Public License for more details.
@@ -20,6 +21,10 @@
 using Gee;
 
 using Curses;
+
+// from ncurses
+[CCode (cname = "define_key")]
+extern int define_key (string definition, int keycode);
 
 static Gee.List<Keystroke> key_buf;
 
@@ -82,6 +87,10 @@ public void term_init () {
 	stdscr.meta (true);
 	stdscr.intrflush (false);
 	stdscr.keypad (true);
+
+	define_key ("\x1b[1;5A", Key.F(60));
+	define_key ("\x1b[1;5B", Key.F(61));
+
 	key_buf = new ArrayList<Keystroke> ();
 	unowned string? kbs = TermInfo.getstr ("kbs");
 	if (kbs != null && kbs.length == 1)
@@ -181,6 +190,10 @@ static Keystroke codetokey (uint c) {
 			return KBD_F11;
 		else if (c == Key.F (12))
 			return KBD_F12;
+		else if (c == Key.F (60))
+			return KBD_UP | KBD_CTRL;
+		else if (c == Key.F (61))
+			return KBD_DOWN | KBD_CTRL;
 		else if (c > 0xff)
 			return KBD_NOKEY;	/* ERR (no key) or undefined behaviour. */
 		return c;
