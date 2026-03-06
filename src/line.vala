@@ -207,6 +207,12 @@ the current buffer."""
 	new LispFunc (
 		"delete-char",
 		(uniarg, args) => {
+			/* With active region, delete the region first */
+			if (cur_bp.mark_active && cur_bp.mark != null) {
+				Region r = Region.calculate ();
+				if (r.size () > 0)
+					return funcall ("kill-region");
+			}
 			long n = 1;
 			int_or_uniarg (args, ref n, uniarg);
 			return execute_with_uniarg (n, cur_bp.delete_char, cur_bp.backward_delete_char);
@@ -218,6 +224,12 @@ the current buffer."""
 	new LispFunc (
 		"backward-delete-char",
 		(uniarg, args) => {
+			/* With active region, delete the region first */
+			if (cur_bp.mark_active && cur_bp.mark != null) {
+				Region r = Region.calculate ();
+				if (r.size () > 0)
+					return funcall ("kill-region");
+			}
 			long n = 1;
 			int_or_uniarg (args, ref n, uniarg);
 			return execute_with_uniarg (n, cur_bp.backward_delete_char, cur_bp.delete_char);
