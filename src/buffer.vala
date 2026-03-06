@@ -110,6 +110,43 @@ public class Buffer {
 		return text.text[o_to_realo (o)];
 	}
 
+	public uint32 get_utf8_char (size_t o, out size_t char_len) {
+		if (o >= length) {
+			char_len = 0;
+			return 0;
+		}
+
+		uchar b = (uchar) get_char (o);
+		if (b < 0x80) {
+			char_len = 1;
+			return b;
+		}
+
+		int seq_len = utf8_seq_len (b);
+		if (seq_len == 0) {
+			char_len = 1;
+			return 0xFFFD;
+		}
+
+		if (o + seq_len > length) {
+			char_len = 1;
+			return 0xFFFD;
+		}
+
+		uint8[] buf = new uint8[seq_len];
+		buf[0] = b;
+		for (int k = 1; k < seq_len; k++)
+			buf[k] = (uint8) get_char (o + k);
+
+		uint32 cp = utf8_decode_buf (buf, seq_len);
+		if (cp != 0xFFFD) {
+			char_len = seq_len;
+			return cp;
+		}
+		char_len = 1;
+		return 0xFFFD;
+	}
+
 	public size_t prev_line (size_t o) {
 		return realo_to_o (text.prev_line (o_to_realo (o)));
 	}
@@ -275,8 +312,11 @@ public class Buffer {
 		if (eolp ()) {
 			replace_estr (eol.length, ImmutableEstr.empty);
 			thisflag |= Flags.NEED_RESYNC;
-		} else
-			replace_estr (1, ImmutableEstr.empty);
+		} else {
+			size_t char_len;
+			get_utf8_char (pt, out char_len);
+			replace_estr (char_len, ImmutableEstr.empty);
+		}
 		modified = true;
 
 		return true;
@@ -538,52 +578,94 @@ public class Buffer {
 	public bool move_char (long offset) {
 		int dir = offset >= 0 ? 1 : -1;
 		for (ulong i = 0; i < (ulong) (offset.abs ()); i++) {
-			if (dir > 0 ? !eolp () : !bolp ())
-				pt += dir;
-			else if (dir > 0 ? !eobp () : !bobp ()) {
-				thisflag |= Flags.NEED_RESYNC;
-				pt += dir * Posix.strlen (eol);
-				if (dir > 0)
+			if (dir > 0) {
+				if (!eolp ()) {
+					size_t char_len;
+					get_utf8_char (pt, out char_len);
+					pt += char_len;
+				} else if (!eobp ()) {
+					thisflag |= Flags.NEED_RESYNC;
+					pt += Posix.strlen (eol);
 					funcall ("beginning-of-line");
-				else
+				} else
+					return false;
+			} else {
+				if (!bolp ()) {
+					/* Walk backward over continuation bytes to find the lead byte,
+					 * then verify the sequence ends exactly at pt. */
+					size_t p = pt - 1;
+					size_t limit = line_o ();
+					while (p > limit && ((uchar) get_char (p) & 0xC0) == 0x80)
+						p--;
+					size_t char_len;
+					get_utf8_char (p, out char_len);
+					if (p + char_len == pt)
+						pt = p;
+					else
+						pt -= 1; /* malformed: step back one byte */
+				} else if (!bobp ()) {
+					thisflag |= Flags.NEED_RESYNC;
+					pt -= Posix.strlen (eol);
 					funcall ("end-of-line");
-			} else
-				return false;
+				} else
+					return false;
+			}
 		}
 
 		return true;
 	}
 
 	/*
-	 * Calculate the goal column.  Take care of expanding tabulations.
+	 * Calculate the goal column.
+	 *
+	 * Iterates from the start of the line to `o` decoding full UTF-8
+	 * characters and accumulating display columns: tabs expand to the next
+	 * tab stop, every other code point contributes its wcwidth.
 	 */
 	public size_t calculate_goalc (size_t o) {
 		size_t col = 0, t = tab_width ();
-		size_t start = start_of_line (o), end = o - start;
+		size_t pos = start_of_line (o);
 
-		for (size_t i = 0; i < end; i++, col++)
-			if (get_char (start + i) == '\t')
-				col |= t - 1;
+		while (pos < o) {
+			size_t char_len;
+			uint32 ch = get_utf8_char (pos, out char_len);
+			if (ch == '\t')
+				col += t - col % t;
+			else
+				col += utf8_char_display_width ((unichar) ch);
+			pos += char_len;
+		}
 
 		return col;
 	}
 
 	/*
-	 * Go to the goal column.  Take care of expanding tabulations.
+	 * Move point to the character whose left edge is at the goal column.
+	 *
+	 * Walks the current line forward one code point at a time.  Stops
+	 * before any character whose left edge would meet or exceed `goalc`,
+	 * or before a wide character that would straddle `goalc`.
 	 */
 	public void goto_goalc () {
-		size_t i, col = 0, t = tab_width ();
+		size_t col = 0, t = tab_width ();
+		size_t i = line_o ();
+		size_t line_end = i + line_len (pt);
 
-		for (i = line_o ();
-			 i < line_o () + line_len (pt);
-			 i++)
-			if (col == goalc)
+		while (i < line_end) {
+			if (col >= goalc)
 				break;
-			else if (get_char (i) == '\t')
-				for (size_t w = t - col % t; w > 0 && ++col < goalc; w--)
-					;
-			else
-				++col;
+
+			size_t char_len;
+			uint32 ch = get_utf8_char (i, out char_len);
+			size_t w = (ch == '\t') ? (t - col % t) : (size_t) utf8_char_display_width ((unichar) ch);
+
+			/* Stop before a character that would push us past goalc. */
+			if (col + w > goalc)
+				break;
+
+			col += w;
+			i += char_len;
+		}
 
 		pt = i;
 	}

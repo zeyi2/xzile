@@ -23,43 +23,125 @@ const int FONT_NORMAL = 0000;
 const int FONT_REVERSE = 0001;
 const int FONT_UNDERLINE = 0002;
 
-string make_char_printable (char c, size_t x, size_t cur_tab_width) {
-	if (c == '\t')
+/*
+ * Return a printable representation for a non-printable code point at
+ * display column `x`.
+ *
+ * Tab   spaces up to the next tab stop.
+ * C0    caret notation ("^@" … "^_").
+ * DEL   "^?".
+ * C1    octal escape ("\200" … "\237").
+ *
+ * Printable code points (including all valid multi-byte UTF-8) must
+ * not be passed here; the caller is responsible for the distinction.
+ */
+string make_char_printable (uint32 ch, size_t x, size_t cur_tab_width) {
+	if (ch == '\t')
 		return "%*s".printf ((int) (cur_tab_width - x % cur_tab_width), "");
-	if (c >= 0 && c <= 033)
-		return "^%c".printf ('@' + c);
-	else
-		return "\\%o".printf (c & 0xff);
+	if (ch < 0x20)
+		return "^%c".printf ((int) ('@' + ch));
+	if (ch == 0x7F)
+		return "^?";
+	if (ch >= 0x80 && ch < 0xA0)
+		return "\\%o".printf ((int) ch);
+	if (ch == 0xFFFD)
+		return "?";
+	/* Caller should not reach here for printable code points. */
+	return "?";
 }
 
+/*
+ * Draw one buffer line onto terminal row `line`.
+ *
+ * `startcol`  – first display column of buffer content to show
+ *               (> 0 when the line is horizontally scrolled).
+ * `o`         – logical byte offset of the line's start in `wp.bp`.
+ */
 void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 				size_t o, Region? r, bool highlight, size_t cur_tab_width) {
 	term_move (line, leftcol);
 
-	/* Draw body of line. */
-	size_t x, i, line_len = wp.bp.line_len (o);
-	for (x = 0, i = startcol;; i++) {
-		term_attrset (highlight && r.contains (o + i) ? FONT_REVERSE : FONT_NORMAL);
-		if (i >= line_len || x >= wp.ewidth)
+	size_t line_len = wp.bp.line_len (o);
+	size_t ew = wp.ewidth;
+
+	size_t i   = 0; /* byte index within the line */
+	size_t col = 0; /* accumulated display column (from line start) */
+	size_t x   = 0; /* display columns written to terminal so far */
+
+	while (i < line_len) {
+		size_t char_len;
+		uint32 ch = wp.bp.get_utf8_char (o + i, out char_len);
+
+		size_t w;
+		if (ch == '\t')
+			w = cur_tab_width - col % cur_tab_width;
+		else
+			w = (size_t) utf8_char_display_width ((unichar) ch);
+
+		if (col + w <= startcol) {
+			col += w;
+			i   += char_len;
+			continue;
+		}
+
+		bool in_highlight = highlight && r != null && r.contains (o + i);
+		term_attrset (in_highlight ? FONT_REVERSE : FONT_NORMAL);
+
+		if (col < startcol) {
+			col += w;
+			i   += char_len;
+			if (x < ew) {
+				term_addstr (" ");
+				x++;
+			}
+			continue;
+		}
+
+		if (x >= ew)
 			break;
-		char c = wp.bp.get_char (o + i);
-		if (c.isprint ()) {
-			term_addch (c);
-			x++;
-        } else {
-			string s = make_char_printable (c, x, cur_tab_width);
+
+		if (x + w > ew) {
+			while (x < ew) {
+				term_addstr (" ");
+				x++;
+			}
+			col += w;
+			i   += char_len;
+			break;
+		}
+
+		/* Emit the character. */
+		if (ch == '\t' || ch < 0x20 || ch == 0x7F
+				|| (ch >= 0x80 && ch < 0xA0) || ch == 0xFFFD) {
+			string s = make_char_printable (ch, col, cur_tab_width);
 			term_addstr (s);
 			x += s.length;
-        }
-    }
+		} else if (char_len == 1) {
+			term_addch ((char) ch);
+			x += w;
+		} else {
+			/* Multi-byte UTF-8: write the raw bytes directly. */
+			uint8[] buf = new uint8[char_len + 1];
+			for (int k = 0; k < char_len; k++)
+				buf[k] = (uint8) wp.bp.get_char (o + i + k);
+			buf[char_len] = 0;
+			term_addstr ((string) buf);
+			x += w;
+		}
 
-	/* Draw end of line. */
-	if (x >= wp.ewidth) {
-		term_move (line, leftcol + wp.ewidth - 1);
+		col += w;
+		i   += char_len;
+	}
+
+	/* Draw end-of-line indicator or padding. */
+	if (x >= ew) {
+		term_move (line, leftcol + ew - 1);
 		term_attrset (FONT_NORMAL);
 		term_addstr ("$");
-    } else
-		term_addstr ("%*s".printf ((int) (wp.ewidth - x), ""));
+	} else {
+		term_attrset (FONT_NORMAL);
+		term_addstr ("%*s".printf ((int) (ew - x), ""));
+	}
 	term_attrset (FONT_NORMAL);
 }
 
@@ -192,38 +274,51 @@ size_t cur_leftcol = 0;
 public void term_redisplay () {
 	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
 
-	/* Calculate the start column if the line at point has to be truncated. */
+	/* Calculate the start column if the line at point has to be truncated.
+	 *
+	 * We scan candidate start positions (in bytes) and for each one
+	 * re-compute the display column of the cursor using UTF-8-aware width
+	 * accumulation.  The loop stops at the leftmost start position where
+	 * the cursor still fits within the window. */
 	Buffer bp = cur_wp.bp;
-	size_t lastcol = 0, t = bp.tab_width ();
-	size_t o = cur_wp.o ();
-	size_t lineo = o - bp.line_o ();
+	size_t t = bp.tab_width ();
+	size_t line_start = bp.line_o ();
+	size_t pt_o = cur_wp.o ();
 
 	col = 0;
-	o -= lineo;
 	cur_wp.start_column = 0;
 
 	size_t ew = cur_wp.ewidth;
-	size_t step = (ew / 3);
-	if (step == 0) step = 1;
 
-	for (size_t lp = lineo; lp != size_t.MAX; --lp) {
-		col = 0;
-		for (size_t p = lp; p < lineo; ++p) {
-			char c = bp.get_char (o + p);
-			if (c.isprint ())
-				col++;
-			else
-				col += make_char_printable (bp.get_char (o + p), col, t).length;
-        }
+	/* cursor_col: display columns from the start of the line to the point. */
+	size_t cursor_col = bp.calculate_goalc (pt_o);
 
-		if (col >= ew - 1 || (lp / step) + 2 < lineo / step) {
-			cur_wp.start_column = lp + 1;
-			col = lastcol;
-			break;
-        }
+	if (cursor_col >= ew) {
+		/* The cursor is off the right edge.  Choose a start column so the
+		 * cursor lands in the right third of the window.  We advance through
+		 * the line byte-by-byte (at code-point boundaries) until the distance
+		 * from that position to the cursor fits. */
+		size_t target_from_right = ew * 2 / 3;
+		size_t pos = line_start;
+		size_t running_col = 0;
 
-		lastcol = col;
-    }
+		while (pos < pt_o) {
+			size_t char_len;
+			uint32 ch = bp.get_utf8_char (pos, out char_len);
+			size_t w = (ch == '\t') ? (t - running_col % t) : (size_t) utf8_char_display_width ((unichar) ch);
+
+			if (cursor_col - running_col <= target_from_right)
+				break;
+
+			running_col += w;
+			pos += char_len;
+		}
+
+		cur_wp.start_column = pos - line_start;
+		col = cursor_col - running_col;
+	} else {
+		col = cursor_col;
+	}
 
 	/* Draw the windows. */
 	cur_topline = 0;

@@ -46,10 +46,11 @@ src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library src/es
 src_zile_VALAFLAGS = $(AM_VALAFLAGS) -D _REGEX_LARGE_OFFSETS --pkg config --pkg gee-0.8 --pkg gio-2.0 --pkg posix --pkg curses --pkg gnu --pkg estr
 src_zile_LDADD = $(LIBOBJS) src/libestr.a $(LDADD)
 
-src_zile_SOURCE_FILES =					\
+src_zile_SOURCE_FILES =				\
 	src/basic.vala					\
 	src/bind.vala					\
 	src/buffer.vala					\
+	src/utf8.vala					\
 	src/completion.vala				\
 	src/eval.vala					\
 	src/file.vala					\
@@ -73,15 +74,15 @@ src_zile_SOURCE_FILES =					\
 	src/shell.vala					\
 	src/tbl_opts.vala				\
 	src/tbl_vars.vala				\
-	src/term_curses.vala				\
-	src/term_minibuf.vala				\
-	src/term_redisplay.vala				\
+	src/term_curses.vala			\
+	src/term_minibuf.vala			\
+	src/term_redisplay.vala			\
 	src/undo.vala					\
 	src/variables.vala				\
 	src/window.vala
 
 src_zile_SOURCES =					\
-	$(src_zile_SOURCE_FILES)			\
+	$(src_zile_SOURCE_FILES)		\
 	$(BUILT_SOURCES)
 
 src/tbl_bindings.vala: src/tbl_bindings.pl build-aux/mkbindings.pl

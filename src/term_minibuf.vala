@@ -24,29 +24,72 @@ namespace TermMinibuf {
 		term_addstr (s);
 	}
 
+	/*
+	 * Return the display-column width of the UTF-8 string `s[0..byte_len)`.
+	 * Uses utf8_char_display_width() (wcwidth) for each code point.
+	 */
+	size_t display_width_of (string s, long byte_len) {
+		size_t col = 0;
+		long i = 0;
+		while (i < byte_len) {
+			unichar ch = s.get_char (i);
+			if (ch == 0) break;
+			int w = utf8_char_display_width (ch);
+			col += (size_t) (w > 0 ? w : 1);
+			long next = utf8_next_pos (s, i);
+			if (next <= i) break; /* safety against infinite loop */
+			i = next;
+		}
+		return col;
+	}
+
 	void draw_read (string prompt, string val,
 					size_t prompt_len, string match, size_t pointo) {
 		write (prompt);
 
+		/* cursor_col: display columns from start of val to the point. */
+		size_t cursor_col = display_width_of (val, (long) pointo);
+		size_t avail = term_width () - prompt_len;
+
 		int margin = 1;
-		size_t n = 0;
-		if (prompt_len + pointo + 1 >= term_width ()) {
+		size_t n = 0;    /* byte offset of the first visible character */
+		size_t n_col = 0; /* display column corresponding to n */
+
+		if (prompt_len + cursor_col + 1 >= term_width ()) {
 			margin++;
 			term_addstr ("$");
-			n = pointo - pointo % (term_width () - prompt_len - 2);
+			avail -= 1;
+			size_t target = avail * 2 / 3;
+			long bi = 0;
+			size_t dcol = 0;
+			while (bi < (long) val.length && cursor_col - dcol > target) {
+				unichar ch = val.get_char (bi);
+				if (ch == 0) break;
+				size_t w = (size_t) utf8_char_display_width (ch);
+				dcol += w;
+				long next = utf8_next_pos (val, bi);
+				if (next <= bi) break;
+				bi = next;
+			}
+			n     = (size_t) bi;
+			n_col = dcol;
 		}
 
 		term_addstr (val.substring ((long) n));
 		term_addstr (match);
 
-		if (val.substring ((long) n).length >= term_width () - prompt_len - margin) {
+		/* Determine whether a right-overflow marker is needed.
+		 * Reuse: total_width - n_col gives the display width from n to end. */
+		size_t total_width = display_width_of (val, (long) val.length);
+		if (total_width - n_col >= avail - margin + 1) {
 			term_move (term_height () - 1, term_width () - 1);
 			term_addstr ("$");
 		}
 
+		/* Place the cursor: prompt + margin + display columns from n to point.
+		 * cursor_col and n_col were both computed above — no extra scan. */
 		term_move (term_height () - 1,
-				   prompt_len + margin - 1 + pointo % (term_width () - prompt_len -
-													   margin));
+				   prompt_len + margin - 1 + (cursor_col - n_col));
 
 		term_refresh ();
 	}
@@ -66,10 +109,54 @@ namespace TermMinibuf {
 		}
 	}
 
+	string? utf8_feed (ref uint8[] accum, uchar b) {
+		if (accum.length == 0) {
+			int need = utf8_seq_len (b);
+			if (need <= 1)
+				return ((string) new uint8[] { b, 0 });
+			accum = new uint8[] { b };
+			return null;
+		}
+
+		if ((b & 0xC0) == 0x80) {
+			int old_len = accum.length;
+			accum.resize (old_len + 1);
+			accum[old_len] = b;
+			int need = utf8_seq_len (accum[0]);
+			if (accum.length == need) {
+				uint8[] tmp = accum;
+				accum = new uint8[0];
+				tmp.resize (need + 1);
+				tmp[need] = 0;
+				string s = (string) tmp;
+				if (s.get_char_validated (-1) > 0)
+					return s[0 : need];
+				return null; /* invalid sequence: discard */
+			}
+			return null;
+		}
+
+		/* Unexpected non-continuation byte: reset and retry. */
+		accum = new uint8[0];
+		return utf8_feed (ref accum, b);
+	}
+
+	/* Thin wrappers so callers can use (string, long) signatures. */
+	long utf8_prev_pos (string s, long pos) {
+		return (long) utf8_prev_char ((char*) s, (size_t) s.length, (size_t) pos);
+	}
+
+	long utf8_next_pos (string s, long pos) {
+		return (long) utf8_next_char ((char*) s, (size_t) s.length, (size_t) pos);
+	}
+
 	delegate void Closure ();
 	public string? read (string prompt, string val, long pos, Completion? cp, History? hp) {
 		if (hp != null)
 			hp.prepare ();
+
+		/* Per-session UTF-8 accumulator (see utf8_feed). */
+		uint8[] accum = new uint8[0];
 
 		uint c = 0;
 		int thistab = 0, lasttab = -1;
@@ -77,7 +164,7 @@ namespace TermMinibuf {
 
 		size_t prompt_len = prompt.length;
 		if (pos == long.MAX)
-			pos = a.length;
+			pos = (long) a.length;
 
 		Closure do_got_tab = () => {
 			if (cp == null) {
@@ -100,7 +187,7 @@ namespace TermMinibuf {
 					if (!a.has_prefix (bs))
 						thistab = -1;
 					a = bs;
-					pos = a.length;
+					pos = (long) a.length;
 				};
 
 				switch (thistab) {
@@ -124,13 +211,20 @@ namespace TermMinibuf {
 			}
 		};
 
+		/* Insert a raw byte `c` (0x20–0xFF) into `a` at `pos`, accumulating
+		 * multi-byte UTF-8 sequences before splicing them in. */
 		Closure other_key = () => {
-			if (c > 255 || !((char) c).isprint ())
+			if (c > 0xFF) {
 				ding ();
-			else {
-				a = a.slice (0, pos) + ((char) c).to_string () + a.substring (pos);
-				pos++;
+				return;
 			}
+
+			string? ch = utf8_feed (ref accum, (uchar) c);
+			if (ch == null)
+				return; /* still accumulating continuation bytes */
+
+			a = a.slice (0, pos) + ch + a.substring (pos);
+			pos += (long) ch.length;
 		};
 
 		do {
@@ -169,25 +263,25 @@ namespace TermMinibuf {
 				break;
 			case KBD_CTRL | 'e':
 			case KBD_END:
-				pos = a.length;
+				pos = (long) a.length;
 				break;
 			case KBD_CTRL | 'b':
 			case KBD_LEFT:
 				if (pos > 0)
-					--pos;
+					pos = utf8_prev_pos (a, pos);
 				else
 					ding ();
 				break;
 			case KBD_CTRL | 'f':
 			case KBD_RIGHT:
-				if (pos < a.length)
-					++pos;
+				if (pos < (long) a.length)
+					pos = utf8_next_pos (a, pos);
 				else
 					ding ();
 				break;
 			case KBD_CTRL | 'k':
 				maybe_destroy_kill_ring ();
-				if (pos < a.length) {
+				if (pos < (long) a.length) {
 					string rest = a.substring (pos);
 					kill_ring_push (ImmutableEstr.of (rest, rest.length));
 					a = a.substring (0, pos);
@@ -199,16 +293,18 @@ namespace TermMinibuf {
 				break;
 			case KBD_BS:
 				if (pos > 0) {
-					a = a.slice (0, pos - 1) + a.substring (pos);
-					--pos;
+					long new_pos = utf8_prev_pos (a, pos);
+					a = a.slice (0, new_pos) + a.substring (pos);
+					pos = new_pos;
 				} else
 					ding ();
 				break;
 			case KBD_CTRL | 'd':
 			case KBD_DEL:
-				if (pos < a.length)
-					a = a.slice (0, pos) + a.substring (pos + 1);
-				else
+				if (pos < (long) a.length) {
+					long next = utf8_next_pos (a, pos);
+					a = a.slice (0, pos) + a.substring (next);
+				} else
 					ding ();
 				break;
 			case KBD_META | 'v':

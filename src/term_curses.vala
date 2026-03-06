@@ -194,8 +194,6 @@ static Keystroke codetokey (uint c) {
 			return KBD_UP | KBD_CTRL;
 		else if (c == Key.F (61))
 			return KBD_DOWN | KBD_CTRL;
-		else if (c > 0xff)
-			return KBD_NOKEY;	/* ERR (no key) or undefined behaviour. */
 		return c;
     }
 }

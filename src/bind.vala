@@ -198,7 +198,7 @@ public void init_default_bindings () {
 
 	/* Bind all printing keys to self_insert_command */
 	for (uint i = 0; i <= 0xff; i++) {
-		if (((char) i).isprint ()) {
+		if (((char) i).isprint () || i >= 0x80) {
 			var keys = new ArrayList<Keystroke> ();
 			keys.add (i);
 			root_bindings.bind (keys, LispFunc.find ("self-insert-command"));
