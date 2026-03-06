@@ -241,3 +241,7 @@
 /visibility.m4
 /wctype.m4
 /zzgnulib.m4
+/gettext_h.m4
+/stdckdint_h.m4
+/streq.m4
+/strncpy.m4

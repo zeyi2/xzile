@@ -113,7 +113,8 @@ public int main (string[] args)
 
 	ZILE_VERSION_STRING = PACKAGE_NAME + " " + VERSION;
 	ZILE_COPYRIGHT_STRING =
-	"Copyright (C) 2020 Free Software Foundation, Inc.";
+	"Copyright (C) 2020 Free Software Foundation, Inc.\n" +
+	"Copyright (C) 2026 Zeyi2 <zeyi2@nekoarch.cc>";
 
 	string splash_str = "\n" +
 "Welcome to " + PACKAGE_NAME + ".\n" +

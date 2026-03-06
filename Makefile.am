@@ -34,7 +34,9 @@ PERL_BUILDTIME =					\
 
 EXTRA_DIST =						\
 	FAQ						\
+	README.md					\
 	build-aux/zile-help2man-wrapper			\
+	build-aux/release.sh				\
 	$(PERL_BUILDTIME)
 
 doc_DATA = AUTHORS FAQ NEWS

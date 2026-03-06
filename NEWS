@@ -3,6 +3,26 @@ GNU Zile NEWS                                         -*- outline -*-
 * Noteworthy changes in release ?.? (????-??-??) [?]
 
 
+* Noteworthy changes in release 2.7.0 (2026-03-06) [beta]
+
+** New features
+
+  UTF-8 support in the main buffer and minibuffer.
+
+  Optional line number display: absolute or relative
+  (line-number-mode, relative-line-number-mode).
+
+  Horizontal window split in addition to vertical split.
+
+  Add Next-buffer and Previous-buffer.
+
+  With an active region, Backspace and Delete remove the whole region.
+
+** Miscellaneous
+
+  This release is the first XZile version. The program is built as
+  xzile; the user init file is ~/.xzile. See README.md for details.
+
 * Noteworthy changes in release 2.6.4 (2025-03-15) [stable]
 
 ** Bug fixes
