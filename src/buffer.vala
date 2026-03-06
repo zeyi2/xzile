@@ -419,8 +419,11 @@ public class Buffer {
 
 	/*
 	 * Switch to the specified buffer.
+     *
+	 * If reorder is true (default), the buffer is moved to the front of the
+	 * buffer list (MRU).
 	 */
-	public void switch_to () {
+	public void switch_to (bool reorder = true) {
 		GLib.assert (cur_wp.bp == cur_bp);
 
 		/* The buffer is the current buffer; return safely.  */
@@ -431,8 +434,8 @@ public class Buffer {
 		cur_bp = this;
 		cur_wp.bp = cur_bp;
 
-		/* Move the buffer to head.  */
-		move_to_head (this);
+		if (reorder)
+			move_to_head (this);
 
 		/* Change to buffer's default directory.  */
 		if (Posix.chdir (dir) != 0) { /* Ignore error. */ }
@@ -848,5 +851,49 @@ public void buffer_init_lisp () {
 		true,
 		"""Kill buffer BUFFER.
 With a nil argument, kill the current buffer."""
+		);
+
+	new LispFunc (
+		"next-buffer",
+		(uniarg, args) => {
+			if (head_bp == null || head_bp.next == null)
+				return true;
+
+			Buffer? next_bp = cur_bp.next;
+			if (next_bp == null)
+				next_bp = head_bp;
+
+			next_bp.switch_to (false);
+			return true;
+		},
+		true,
+		"""Switch to the next buffer in the buffer list."""
+		);
+
+	new LispFunc (
+		"previous-buffer",
+		(uniarg, args) => {
+			if (head_bp == null || head_bp.next == null)
+				return true;
+
+			Buffer? prev_bp = null;
+			if (cur_bp == head_bp) {
+				for (Buffer? bp = head_bp; bp != null; bp = bp.next)
+					prev_bp = bp;
+			} else {
+				for (Buffer? bp = head_bp; bp != null; bp = bp.next) {
+					if (bp.next == cur_bp) {
+						prev_bp = bp;
+						break;
+					}
+				}
+			}
+
+			if (prev_bp != null)
+				prev_bp.switch_to (false);
+			return true;
+		},
+		true,
+		"""Switch to the previous buffer in the buffer list."""
 		);
 }
