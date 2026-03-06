@@ -1,5 +1,5 @@
 [description]
-Zile is a lightweight Emacs clone that provides a subset of Emacs's
+XZile is a lightweight Emacs clone that provides a subset of Emacs's
 functionality suitable for basic editing.
 
 /then go to/
@@ -8,7 +8,7 @@ of an invalid command-line argument, and 2 if it crashes or runs out
 of memory.
 
 [files]
-~/.zile \(em user's Zile init file
+~/.xzile \(em user's XZile init file
 .PP
 @docdir@/dotzile.sample \(em which contains some useful
 code for the init file.
@@ -16,6 +16,7 @@ code for the init file.
 [author]
 Zile was written by Sandro Sigala, David A. Capello and Reuben Thomas.
 The Lisp interpreter is based on code by Scott Lawrence.
+XZile was extended by Zeyi2, as a side project.
 
 [see also]
 .BR emacs (1)

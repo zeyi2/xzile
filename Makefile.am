@@ -49,7 +49,7 @@ PRODUCTIONSOURCES =					\
 	$(PERL_BUILDTIME)				\
 	doc/Makefile.am					\
 	src/Makefile.am					\
-	$(src_zile_SOURCE_FILES)			\
+	$(src_xzile_SOURCE_FILES)			\
 	$(src_libestr_a_SOURCES)			\
 	$(VAPIS)
 

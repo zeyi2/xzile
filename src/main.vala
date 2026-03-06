@@ -111,12 +111,12 @@ public int main (string[] args)
 		}
 	}
 
-	ZILE_VERSION_STRING = "GNU " + PACKAGE_NAME + " " + VERSION;
+	ZILE_VERSION_STRING = PACKAGE_NAME + " " + VERSION;
 	ZILE_COPYRIGHT_STRING =
 	"Copyright (C) 2020 Free Software Foundation, Inc.";
 
 	string splash_str = "\n" +
-"Welcome to GNU " + PACKAGE_NAME + ".\n" +
+"Welcome to " + PACKAGE_NAME + ".\n" +
 "\n" +
 "Undo changes       C-x u        Exit " + PACKAGE_NAME + "         C-x C-c\n" +
 "(`C-' means use the CTRL key.  `M-' means hold the Meta (or Alt) key.\n" +
@@ -128,7 +128,7 @@ public int main (string[] args)
 ZILE_VERSION_STRING + "\n" +
 ZILE_COPYRIGHT_STRING + "\n" +
 "\n" +
-"GNU " + PACKAGE_NAME + " comes with ABSOLUTELY NO WARRANTY.\n" +
+PACKAGE_NAME + " comes with ABSOLUTELY NO WARRANTY.\n" +
 PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute copies\n" +
 "of " + PACKAGE_NAME + " and modify it; see the file COPYING.  Otherwise, a copy can be\n" +
 "downloaded from https://www.gnu.org/licenses/gpl.html.\n";
@@ -230,16 +230,16 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 					"Report bugs to " + PACKAGE_BUGREPORT + ".\n");
 			exit (EXIT_SUCCESS);
 			break;
-        case 4:
+		case 4:
 			print (ZILE_VERSION_STRING + "\n" +
 				   ZILE_COPYRIGHT_STRING + "\n" +
-				   "GNU " + PACKAGE_NAME + " comes with ABSOLUTELY NO WARRANTY.\n" +
+				   PACKAGE_NAME + " comes with ABSOLUTELY NO WARRANTY.\n" +
 				   "You may redistribute copies of " + PACKAGE_NAME + "\n" +
 				   "under the terms of the GNU General Public License.\n" +
 				   "For more information about these matters, see the file named COPYING.\n");
 			exit (EXIT_SUCCESS);
 			break;
-        case 5:
+		case 5:
 			if (optarg[0] == '+')
 				long.try_parse (optarg.substring (1), out line, null, 10);
 			else {
@@ -283,7 +283,7 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 	   error. */
 	if (arg_arg.length () == 0 && Minibuf.no_error () &&
 		!get_variable_bool ("inhibit-splash-screen")) {
-		Buffer bp = create_auto_buffer ("*GNU " + PACKAGE_NAME + "*");
+		Buffer bp = create_auto_buffer ("*XZile*");
 		bp.switch_to ();
 		bprintf ("%s", splash_str);
 		bp.readonly = true;

@@ -31,9 +31,9 @@ doc/zile.1: $(srcdir)/doc/zile.1.in doc/Makefile.am config.status
 	$(edit) $(abs_srcdir)/doc/zile.1.in >$@.tmp
 	mv $@.tmp $@
 
-$(srcdir)/doc/zile.1.in: doc/man-extras build-aux/zile-help2man-wrapper configure.ac $(builddir)/src/zile$(EXEEXT)
+$(srcdir)/doc/zile.1.in: doc/man-extras build-aux/zile-help2man-wrapper configure.ac $(builddir)/src/xzile$(EXEEXT)
 	@test -d doc || mkdir doc
 ## Exit gracefully if zile.1.in is not writeable, such as during distcheck!
 	$(AM_V_GEN)if ( touch $@.w && rm -f $@.w; ) >/dev/null 2>&1; then \
-	  $(srcdir)/build-aux/missing --run $(HELP2MAN) --output=$@ --no-info --name="Zile Is Lossy Emacs" --include $(srcdir)/doc/man-extras $(srcdir)/build-aux/zile-help2man-wrapper; \
+	  $(srcdir)/build-aux/missing --run $(HELP2MAN) --output=$@ --no-info --name="XZile eXtends Zile" --include $(srcdir)/doc/man-extras $(srcdir)/build-aux/zile-help2man-wrapper; \
 	fi

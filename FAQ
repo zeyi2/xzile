@@ -73,6 +73,8 @@ INDEX
     acronym like `GNU'.  The reason that it's not written in all caps
     is because Emacs (which is also an acronym) isn't either.
 
+    (XZile means XZile eXtends Zile.)
+
 2.2 Why another clone of Emacs?  Why not just use Emacs?
 
     Zile is a small, portable Emacs for systems and situations in

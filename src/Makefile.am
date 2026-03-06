@@ -37,16 +37,16 @@ BUILT_SOURCES =						\
 src/dummy.vala: $(VAPIS) $(BUILT_VAPIS)
 	touch $@
 
-bin_PROGRAMS = src/zile
+bin_PROGRAMS = src/xzile
 
 noinst_LIBRARIES = src/libestr.a
 src_libestr_a_SOURCES = src/estr.vala
 src_libestr_a_VALAFLAGS = $(AM_VALAFLAGS) --pkg posix --pkg gnu --library src/estr --header src/estr.h --vapi=src/estr.vapi
 
-src_zile_VALAFLAGS = $(AM_VALAFLAGS) -D _REGEX_LARGE_OFFSETS --pkg config --pkg gee-0.8 --pkg gio-2.0 --pkg posix --pkg curses --pkg gnu --pkg estr
-src_zile_LDADD = $(LIBOBJS) src/libestr.a $(LDADD)
+src_xzile_VALAFLAGS = $(AM_VALAFLAGS) -D _REGEX_LARGE_OFFSETS --pkg config --pkg gee-0.8 --pkg gio-2.0 --pkg posix --pkg curses --pkg gnu --pkg estr
+src_xzile_LDADD = $(LIBOBJS) src/libestr.a $(LDADD)
 
-src_zile_SOURCE_FILES =				\
+src_xzile_SOURCE_FILES =				\
 	src/basic.vala					\
 	src/bind.vala					\
 	src/buffer.vala					\
@@ -81,8 +81,8 @@ src_zile_SOURCE_FILES =				\
 	src/variables.vala				\
 	src/window.vala
 
-src_zile_SOURCES =					\
-	$(src_zile_SOURCE_FILES)		\
+src_xzile_SOURCES =					\
+	$(src_xzile_SOURCE_FILES)		\
 	$(BUILT_SOURCES)
 
 src/tbl_bindings.vala: src/tbl_bindings.pl build-aux/mkbindings.pl

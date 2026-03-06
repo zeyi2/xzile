@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-ZILE_CMD = $(builddir)/src/zile$(EXEEXT)
+ZILE_CMD = $(builddir)/src/xzile$(EXEEXT)
 
 TEST_EXTENSIONS = .el
 EL_LOG_COMPILER = $(PERL) $(srcdir)/tests/run-lisp-test.pl
@@ -253,4 +253,4 @@ check-emacs:
 
 check-local:
 	$(AM_TESTS_ENVIRONMENT) echo $(LISP_TESTS_ZILE_ONLY_FIXED_SCREEN) | COLUMNS=80 LINES=24 xargs $(RUNLISPTESTS)
-	$(AM_TESTS_ENVIRONMENT) $(builddir)/src/zile$(EXEEXT) --unknown-flag --load $(srcdir)/tests/quit.el
+	$(AM_TESTS_ENVIRONMENT) $(builddir)/src/xzile$(EXEEXT) --unknown-flag --load $(srcdir)/tests/quit.el
