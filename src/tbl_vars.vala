@@ -35,6 +35,8 @@ public void init_variables () {
 	init_builtin_var ("case-replace", "t", false, "Non-nil means `query-replace' should preserve case in replacements.");
 	init_builtin_var ("ring-bell", "t", false, "Non-nil means ring the terminal bell on any error.");
 	init_builtin_var ("highlight-nonselected-windows", "nil", false, "If non-nil, highlight region even in nonselected windows.");
+	init_builtin_var ("line-number-mode", "nil", true, "If non-nil, display line numbers in the left margin.");
+	init_builtin_var ("relative-line-number-mode", "nil", true, "If non-nil, display relative line numbers (distance from current line).");
 	init_builtin_var ("make-backup-files", "t", false, "Non-nil means make a backup of a file the first time it is saved.\nThis is done by appending `~' to the file name.");
 	init_builtin_var ("backup-directory", "nil", false, "The directory for backup files, which must exist.\nIf this variable is nil, the backup is made in the original file's\ndirectory.\nThis value is used only when `make-backup-files' is t.");
 }

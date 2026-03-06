@@ -70,8 +70,11 @@ void set_variable (string name, string val) {
 }
 
 static VarEntry? get_variable_entry (Buffer? bp, string name) {
-	if (bp != null && bp.vars != null)
-		return bp.vars.lookup (name);
+	if (bp != null && bp.vars != null) {
+		VarEntry? v = bp.vars.lookup (name);
+		if (v != null)
+			return v;
+	}
 	return main_vars.lookup (name);
 }
 

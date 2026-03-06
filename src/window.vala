@@ -39,6 +39,7 @@ public class Window {
 	public size_t ewidth;	/* The effective width and height of the window. */
 	public size_t eheight;
 	public size_t xpos;
+	public size_t gutter_width; /* Width of the line-number gutter (0 if disabled). */
 	public bool all_displayed; /* The bottom of the buffer is visible */
 	internal size_t lastpointn;		/* The last point line number. */
 
