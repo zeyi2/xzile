@@ -628,4 +628,50 @@ Interactively, confirmation is required unless you supply a prefix argument."""
 		true,
 		"""Make DIR become the current buffer's default directory."""
 		);
+
+	new LispFunc (
+		"revert-buffer",
+		(uniarg, args) => {
+			if (cur_bp.filename == null) {
+				Minibuf.error ("Buffer does not seem to be associated with any file");
+				return false;
+			}
+
+			bool? ans = Minibuf.read_yesno ("Revert buffer from file %s? (yes or no) ", cur_bp.filename);
+			if (ans == null) {
+				funcall ("keyboard-quit");
+				return false;
+			} else if (ans == false) {
+				return false;
+			}
+
+			Estr es;
+			try {
+				es = Estr.from_file (cur_bp.filename);
+			} catch {
+				Minibuf.error ("%s: %s", cur_bp.filename, Posix.strerror (errno));
+				return false;
+			}
+
+			size_t old_pt = cur_bp.pt;
+			bool old_noundo = cur_bp.noundo;
+
+			cur_bp.noundo = true;
+			cur_bp.readonly = false;
+			cur_bp.goto_offset (0);
+			cur_bp.replace_estr (cur_bp.length, es);
+			cur_bp.goto_offset (size_t.min (old_pt, cur_bp.length));
+			cur_bp.noundo = old_noundo;
+			cur_bp.readonly = !check_writable (cur_bp.filename);
+
+			cur_bp.modified = false;
+			cur_bp.next_undop = null;
+			cur_bp.last_undop = null;
+			thisflag |= Flags.NEED_RESYNC;
+
+			return true;
+		},
+		true,
+		"""Replace the buffer text with the text of the visited file on disk."""
+		);
 }
