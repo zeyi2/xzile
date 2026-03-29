@@ -21,6 +21,7 @@
 using Gee;
 
 using Curses;
+using Posix;
 
 // from ncurses
 [CCode (cname = "define_key")]
@@ -32,8 +33,13 @@ static Gee.List<Keystroke> key_buf;
 static TerminalCapabilities terminal_capabilities;
 static HashMap<string, int> color_pair_cache;
 static int next_color_pair = 1;
+static string? pending_paste_text;
 
 static Keystroke backspace_code = 0177;
+const string BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
+const string BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
+const string BRACKETED_PASTE_START = "200~";
+const string BRACKETED_PASTE_END = "\x1b[201~";
 
 public uint term_buf_len () {
 	return key_buf.size;
@@ -152,6 +158,11 @@ public void term_apply_face (string face_name) {
 	}
 }
 
+static void term_set_bracketed_paste_mode (bool enabled) {
+	string seq = enabled ? BRACKETED_PASTE_ENABLE : BRACKETED_PASTE_DISABLE;
+	Posix.write (1, seq, seq.length);
+}
+
 public void term_init () {
 	initscr ();
 	noecho ();
@@ -181,13 +192,16 @@ public void term_init () {
 	define_key ("\x1b[1;5B", Key.F(61));
 
 	key_buf = new ArrayList<Keystroke> ();
+	pending_paste_text = null;
 	unowned string? kbs = TermInfo.getstr ("kbs");
 	if (kbs != null && kbs.length == 1)
 		backspace_code = kbs[0];
+	term_set_bracketed_paste_mode (true);
 }
 
 public void term_close () {
 	/* Finish with ncurses. */
+	term_set_bracketed_paste_mode (false);
 	endwin ();
 }
 
@@ -435,11 +449,70 @@ static uint get_char (int delay) {
 	return c;
 }
 
+static void push_raw_codes (Gee.List<uint> codes) {
+	for (int i = codes.size; i > 0; i--)
+		key_buf.add ((Keystroke) codes[i - 1]);
+}
+
+static string read_bracketed_paste_payload () {
+	StringBuilder text = new StringBuilder ();
+	int matched = 0;
+
+	stdscr.keypad (false);
+	while (true) {
+		uint c = get_char (GETKEY_DEFAULT);
+		if (c == (uint) BRACKETED_PASTE_END[matched]) {
+			matched++;
+			if (matched == BRACKETED_PASTE_END.length)
+				break;
+			continue;
+		}
+
+		for (int i = 0; i < matched; i++)
+			text.append_c (BRACKETED_PASTE_END[i]);
+		matched = 0;
+
+		if (c == (uint) BRACKETED_PASTE_END[0])
+			matched = 1;
+		else
+			text.append_c ((char) c);
+	}
+	stdscr.keypad (true);
+
+	return text.str;
+}
+
+static bool try_consume_bracketed_paste_start () {
+	var consumed = new ArrayList<uint> ();
+
+	for (int i = 0; i < BRACKETED_PASTE_START.length; i++) {
+		uint c = get_char (GETKEY_DEFAULT);
+		consumed.add (c);
+		if (c != (uint) BRACKETED_PASTE_START[i]) {
+			push_raw_codes (consumed);
+			return false;
+		}
+	}
+
+	pending_paste_text = read_bracketed_paste_payload ();
+	return true;
+}
+
 public Keystroke term_getkey (int delay) {
-	Keystroke key = codetokey (get_char (delay));
-	while (key == KBD_META)
-		key = codetokey (get_char (GETKEY_DEFAULT)) | KBD_META;
-	return key;
+	uint c = get_char (delay);
+
+	if (c == 033) {
+		uint next = get_char (GETKEY_DEFAULT);
+		if (next == '[' && try_consume_bracketed_paste_start ())
+			return KBD_BRACKETED_PASTE;
+
+		Keystroke key = codetokey (next);
+		while (key == KBD_META)
+			key = codetokey (get_char (GETKEY_DEFAULT)) | KBD_META;
+		return key | KBD_META;
+	}
+
+	return codetokey (c);
 }
 
 public uint term_getkey_unfiltered (int delay) {
@@ -453,4 +526,10 @@ public void term_ungetkey (Keystroke key) {
 	Gee.List<uint> codes = keytocodes (key);
 	for (int i = codes.size; i > 0; i--)
 		key_buf.add (codes[i - 1]);
+}
+
+public string? term_take_pending_paste () {
+	string? text = pending_paste_text;
+	pending_paste_text = null;
+	return text;
 }

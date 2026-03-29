@@ -146,6 +146,23 @@ bool self_insert_command () {
 	return ret;
 }
 
+bool bracketed_paste_command () {
+	string? text = term_take_pending_paste ();
+	if (text == null || text.length == 0)
+		return true;
+
+	if (cur_bp.warn_if_readonly ())
+		return false;
+
+	cur_bp.mark_active = false;
+	string eol = ImmutableEstr.eol_lf;
+	if (text.contains ("\r\n"))
+		eol = ImmutableEstr.eol_crlf;
+	else if (text.contains ("\r"))
+		eol = ImmutableEstr.eol_cr;
+	return cur_bp.insert_estr (ImmutableEstr.of (text, text.length, eol));
+}
+
 LispFunc _last_command;
 LispFunc _this_command;
 
@@ -184,6 +201,17 @@ bool call_command (LispFunc f, long uniarg, Gee.Queue<string>? args) {
 
 void get_and_run_command () {
 	Gee.List<Keystroke> keys = get_key_sequence ();
+	if (keys.size == 1 && keys[0] == KBD_BRACKETED_PASTE) {
+		thisflag = lastflag & Flags.DEFINING_MACRO;
+		undo_start_sequence ();
+		if (!(Flags.SET_UNIARG in thisflag))
+			last_uniarg = 1;
+		bracketed_paste_command ();
+		undo_end_sequence ();
+		lastflag = thisflag;
+		return;
+	}
+
 	LispFunc f = get_function_by_keys (keys);
 
 	Minibuf.clear ();

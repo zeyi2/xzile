@@ -52,11 +52,70 @@ public class Buffer {
 	private Gee.HashMap<int, int>? syntax_state_cache;
 	private int syntax_valid_upto = 0;
 	private size_t syntax_valid_offset = 0;
+	const size_t LINE_INDEX_STRIDE = 256;
+	private Gee.ArrayList<uint>? line_offset_checkpoints;
+	private size_t line_indexed_upto_line = 0;
+	private size_t line_indexed_upto_offset = 0;
 
 	private void reset_syntax_cache () {
 		syntax_state_cache = null;
 		syntax_valid_upto = 0;
 		syntax_valid_offset = 0;
+	}
+
+	private void reset_line_index () {
+		line_offset_checkpoints = new Gee.ArrayList<uint> ();
+		line_offset_checkpoints.add ((uint) 0);
+		line_indexed_upto_line = 0;
+		line_indexed_upto_offset = 0;
+	}
+
+	private void ensure_line_index_initialized () {
+		if (line_offset_checkpoints == null)
+			reset_line_index ();
+	}
+
+	private void ensure_line_index_to_offset (size_t offset) {
+		ensure_line_index_initialized ();
+
+		size_t o = line_indexed_upto_offset;
+		size_t line = line_indexed_upto_line;
+		while (o < offset) {
+			size_t next_o = next_line (o);
+			if (next_o == size_t.MAX)
+				break;
+			o = next_o;
+			line++;
+			if ((line % LINE_INDEX_STRIDE) == 0)
+				line_offset_checkpoints.add ((uint) o);
+		}
+
+		line_indexed_upto_offset = o;
+		line_indexed_upto_line = line;
+	}
+
+	private int find_line_checkpoint_index (size_t offset) {
+		ensure_line_index_to_offset (offset);
+
+		for (int i = line_offset_checkpoints.size - 1; i > 0; i--) {
+			if ((size_t) line_offset_checkpoints[i] <= offset)
+				return i;
+		}
+		return 0;
+	}
+
+	private void invalidate_line_index_at (size_t offset) {
+		ensure_line_index_initialized ();
+
+		size_t line_idx = offset_to_line (offset);
+		size_t checkpoint_line = (line_idx / LINE_INDEX_STRIDE) * LINE_INDEX_STRIDE;
+		int checkpoint_idx = (int) (checkpoint_line / LINE_INDEX_STRIDE);
+
+		while (line_offset_checkpoints.size > checkpoint_idx + 1)
+			line_offset_checkpoints.remove_at (line_offset_checkpoints.size - 1);
+
+		line_indexed_upto_line = checkpoint_line;
+		line_indexed_upto_offset = (size_t) line_offset_checkpoints[checkpoint_idx];
 	}
 
 	public int get_line_start_state (int line_idx) {
@@ -155,6 +214,7 @@ public class Buffer {
 	public Buffer (Estr es=Estr.of_empty()) {
 		text = es;
 		dir = Environment.get_current_dir ();
+		reset_line_index ();
 
 		/* Insert into buffer list. */
 		next = head_bp;
@@ -267,6 +327,7 @@ public class Buffer {
 		if (warn_if_readonly ())
 			return false;
 
+		invalidate_line_index_at (pt);
 		invalidate_syntax_cache_at (pt);
 
 		size_t newlen = es.len_with_eol (eol);
@@ -888,8 +949,10 @@ public class Buffer {
 	}
 
 	public size_t offset_to_line (size_t offset) {
-		size_t n = 0;
-		for (size_t o = 0; end_of_line (o) < offset; o = next_line (o))
+		int checkpoint_idx = find_line_checkpoint_index (offset);
+		size_t n = (size_t) checkpoint_idx * LINE_INDEX_STRIDE;
+		size_t o = (size_t) line_offset_checkpoints[checkpoint_idx];
+		for (; end_of_line (o) < offset; o = next_line (o))
 			n++;
 		return n;
 	}

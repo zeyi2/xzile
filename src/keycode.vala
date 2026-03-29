@@ -53,6 +53,7 @@ public const Keystroke KBD_F9 = 00430;
 public const Keystroke KBD_F10 = 00431;
 public const Keystroke KBD_F11 = 00432;
 public const Keystroke KBD_F12 = 00433;
+public const Keystroke KBD_BRACKETED_PASTE = 00434;
 
 struct KeyInfo {
 	Keystroke code;
