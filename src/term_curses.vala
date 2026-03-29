@@ -30,6 +30,8 @@ extern int use_default_colors ();
 
 static Gee.List<Keystroke> key_buf;
 static TerminalCapabilities terminal_capabilities;
+static HashMap<string, int> color_pair_cache;
+static int next_color_pair = 1;
 
 static Keystroke backspace_code = 0177;
 
@@ -86,6 +88,63 @@ public TerminalCapabilities term_get_capabilities () {
 	return terminal_capabilities;
 }
 
+static int allocate_color_pair (int foreground, int background) {
+	string key = "%d:%d".printf (foreground, background);
+	int? cached = color_pair_cache[key];
+	if (cached != null)
+		return (int) cached;
+
+	if (terminal_capabilities.color_pair_count > 0
+		&& next_color_pair >= terminal_capabilities.color_pair_count)
+		return 0;
+
+	if (init_pair ((short) next_color_pair, (short) foreground, (short) background) != -1) {
+		color_pair_cache[key] = next_color_pair;
+		next_color_pair++;
+		return color_pair_cache[key];
+	}
+
+	return 0;
+}
+
+static int style_color_pair (TerminalStyle style) {
+	if (!terminal_capabilities.has_colors)
+		return 0;
+	if (!style.has_foreground && !style.has_background)
+		return 0;
+
+	int foreground = style.has_foreground ? style.foreground : TERM_COLOR_DEFAULT;
+	int background = style.has_background ? style.background : TERM_COLOR_DEFAULT;
+
+	if (!terminal_capabilities.supports_default_colors) {
+		/* Some terminals reject default-color pairs.  Use the concrete
+		 * fallbacks precomputed into the terminal style by the resolver. */
+		if (foreground == TERM_COLOR_DEFAULT)
+			foreground = style.default_foreground_fallback;
+		if (background == TERM_COLOR_DEFAULT)
+			background = style.default_background_fallback;
+	}
+
+	return allocate_color_pair (foreground, background);
+}
+
+public void term_apply_style (TerminalStyle style) {
+	int attrs = 0;
+
+	if (style.bold)
+		attrs |= Attribute.BOLD;
+	if (style.underline)
+		attrs |= Attribute.UNDERLINE;
+	if (style.reverse)
+		attrs |= Attribute.REVERSE;
+
+	int color_pair = style_color_pair (style);
+	if (color_pair > 0)
+		attrs |= Curses.COLOR_PAIR (color_pair);
+
+	attrset (attrs);
+}
+
 public void term_init () {
 	initscr ();
 	noecho ();
@@ -96,6 +155,8 @@ public void term_init () {
 	stdscr.keypad (true);
 
 	terminal_capabilities = new TerminalCapabilities ();
+	color_pair_cache = new HashMap<string, int> ();
+	next_color_pair = 1;
 	// FIXME: These are conservative backend assumptions for now, not
 	// runtime-detected capabilities.
 	terminal_capabilities.supports_reverse = true;

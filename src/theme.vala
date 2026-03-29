@@ -31,6 +31,8 @@ public const string THEME_DEFAULT_LIGHT = "default-light";
 public const string THEME_TERMINAL_DEFAULT = "terminal-default";
 public const int TERM_COLOR_UNSPECIFIED = -2;
 public const int TERM_COLOR_DEFAULT = -1;
+public const int TERM_COLOR_BLACK = 0;
+public const int TERM_COLOR_WHITE = 7;
 
 public class TerminalCapabilities {
 	public bool has_colors { get; set; default = false; }
@@ -63,6 +65,8 @@ public class TerminalStyle {
 	public string face_name { get; private set; }
 	public int foreground = TERM_COLOR_UNSPECIFIED;
 	public int background = TERM_COLOR_UNSPECIFIED;
+	public int default_foreground_fallback = TERM_COLOR_UNSPECIFIED;
+	public int default_background_fallback = TERM_COLOR_UNSPECIFIED;
 	public bool bold;
 	public bool underline;
 	public bool reverse;
@@ -337,6 +341,16 @@ static void apply_mono_fallback (string face_name,
 	}
 }
 
+static void populate_default_color_fallbacks (TerminalStyle style, Theme? theme) {
+	bool prefer_light_defaults =
+		theme != null && theme.variant != null && (string) theme.variant == "light";
+
+	style.default_foreground_fallback =
+		prefer_light_defaults ? TERM_COLOR_BLACK : TERM_COLOR_WHITE;
+	style.default_background_fallback =
+		prefer_light_defaults ? TERM_COLOR_WHITE : TERM_COLOR_BLACK;
+}
+
 public TerminalStyle resolve_terminal_style (string face_name,
 											 Theme? theme = null,
 											 TerminalCapabilities? capabilities = null) {
@@ -345,6 +359,7 @@ public TerminalStyle resolve_terminal_style (string face_name,
 
 	ResolvedFace resolved = resolve_face (face_name, theme);
 	TerminalStyle style = new TerminalStyle (face_name);
+	populate_default_color_fallbacks (style, theme);
 
 	style.bold = resolved.bold;
 	style.underline = resolved_capabilities.supports_underline && resolved.underline;
