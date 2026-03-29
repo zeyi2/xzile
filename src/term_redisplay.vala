@@ -245,7 +245,7 @@ static void update_gutter_width (Window wp) {
 }
 
 static void draw_status_line (size_t line, size_t leftcol, Window wp) {
-	term_attrset (FONT_REVERSE);
+	term_apply_face (wp == cur_wp ? FACE_MODE_LINE : FACE_MODE_LINE_INACTIVE);
 
 	term_move (line, leftcol);
 	for (size_t i = 0; i < wp.ewidth; ++i)

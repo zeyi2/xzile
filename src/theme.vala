@@ -563,4 +563,5 @@ public void theme_init () {
 	define_default_dark_theme ();
 	define_default_light_theme ();
 	define_terminal_default_theme ();
+	activate_theme (THEME_TERMINAL_DEFAULT);
 }

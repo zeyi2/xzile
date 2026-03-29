@@ -145,6 +145,10 @@ public void term_apply_style (TerminalStyle style) {
 	attrset (attrs);
 }
 
+public void term_apply_face (string face_name) {
+	term_apply_style (resolve_terminal_style (face_name));
+}
+
 public void term_init () {
 	initscr ();
 	noecho ();
