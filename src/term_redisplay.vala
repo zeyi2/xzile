@@ -70,6 +70,14 @@ void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 
 	size_t line_len = wp.bp.line_len (o);
 	size_t ew = gutter_width < wp.ewidth ? wp.ewidth - gutter_width : 0;
+	string?[]? syntax_faces = null;
+
+	if (wp.bp.highlighter != null && line_len > 0) {
+		syntax_faces = new string?[(int) line_len];
+		size_t line_idx = wp.bp.offset_to_line (o);
+		int start_state = wp.bp.get_line_start_state ((int) line_idx);
+		wp.bp.highlighter.scan_line (wp.bp, line_idx, o, line_len, start_state, syntax_faces);
+	}
 
 	size_t i   = 0; /* byte index within the line */
 	size_t col = 0; /* accumulated display column (from line start) */
@@ -92,7 +100,10 @@ void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 		}
 
 		bool in_highlight = highlight && r != null && r.contains (o + i);
-		term_apply_face (in_highlight ? FACE_REGION : FACE_DEFAULT);
+		string face_name = FACE_DEFAULT;
+		if (syntax_faces != null && i < syntax_faces.length && syntax_faces[(int) i] != null)
+			face_name = (string) syntax_faces[(int) i];
+		term_apply_face (in_highlight ? FACE_REGION : face_name);
 
 		if (col < startcol) {
 			col += w;
