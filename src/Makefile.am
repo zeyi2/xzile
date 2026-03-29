@@ -77,6 +77,7 @@ src_xzile_SOURCE_FILES =				\
 	src/term_curses.vala			\
 	src/term_minibuf.vala			\
 	src/term_redisplay.vala			\
+	src/theme.vala					\
 	src/undo.vala					\
 	src/variables.vala				\
 	src/window.vala

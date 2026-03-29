@@ -152,6 +152,7 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 	registers_init ();
 	search_init ();
 	shell_init ();
+	theme_init ();
 	undo_init ();
 	variables_init ();
 	window_init ();
