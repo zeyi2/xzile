@@ -21,7 +21,9 @@ namespace TermMinibuf {
 	public void write (string s) {
 		term_move (term_height () - 1, 0);
 		term_clrtoeol ();
+		term_apply_face (Minibuf.showing_error () ? FACE_ERROR : FACE_DEFAULT);
 		term_addstr (s);
+		term_apply_face (FACE_DEFAULT);
 	}
 
 	/*
@@ -45,7 +47,11 @@ namespace TermMinibuf {
 
 	void draw_read (string prompt, string val,
 					size_t prompt_len, string match, size_t pointo) {
-		write (prompt);
+		term_move (term_height () - 1, 0);
+		term_clrtoeol ();
+		term_apply_face (FACE_MINIBUFFER_PROMPT);
+		term_addstr (prompt);
+		term_apply_face (FACE_DEFAULT);
 
 		/* cursor_col: display columns from start of val to the point. */
 		size_t cursor_col = display_width_of (val, (long) pointo);

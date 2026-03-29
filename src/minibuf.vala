@@ -23,6 +23,7 @@ using Curses;
 namespace Minibuf {
 	public static History files_history;
 	public static string contents;
+	public static bool error_displayed;
 
 	/*--------------------------------------------------------------------------
 	 * Minibuffer wrapper functions.
@@ -36,6 +37,10 @@ namespace Minibuf {
 		return contents == null;
 	}
 
+	public bool showing_error () {
+		return error_displayed;
+	}
+
 	public void refresh () {
 		if (cur_wp != null) {
 			if (contents != null)
@@ -47,11 +52,14 @@ namespace Minibuf {
 		}
 	}
 
-	void vwrite (string fmt, va_list ap) {
+	void vwrite_with_state (bool is_error, string fmt, va_list ap) {
 		string s = fmt.vprintf (ap);
-		if (contents == null || s != contents) {
+		if (contents == null || s != contents || error_displayed != is_error) {
 			contents = s;
+			error_displayed = is_error;
 			refresh ();
+		} else {
+			error_displayed = is_error;
 		}
 	}
 
@@ -59,14 +67,14 @@ namespace Minibuf {
 	 * Write the specified string in the minibuffer.
 	 */
 	public void write (string fmt, ...) {
-		vwrite (fmt, va_list());
+		vwrite_with_state (false, fmt, va_list());
 	}
 
 	/*
 	 * Write the specified error string in the minibuffer and signal an error.
 	 */
 	public void error (string fmt, ...)	{
-		vwrite (fmt, va_list ());
+		vwrite_with_state (true, fmt, va_list ());
 		ding ();
 	}
 
@@ -198,6 +206,7 @@ namespace Minibuf {
 	 * Clear the minibuffer.
 	 */
 	public void clear () {
+		error_displayed = false;
 		TermMinibuf.write ("");
 	}
 
