@@ -471,6 +471,12 @@ public class Buffer {
 		if (filename[0] != '/')
 			filename = Path.build_filename (Environment.get_current_dir (), filename);
 
+		string basename = Path.get_basename (filename);
+		if (basename.has_suffix (".c") || basename.has_suffix (".h"))
+			highlighter = new CHighlighter ();
+		else
+			highlighter = null;
+
 		string new_name = Path.get_basename (filename);
 		/* Note: there can't be more than size_t.MAX buffers. */
 		for (size_t i = 2; find (new_name) != null; i++)

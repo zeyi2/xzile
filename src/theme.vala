@@ -328,6 +328,7 @@ static void apply_mono_fallback (string face_name,
 	case FACE_ERROR:
 	case FACE_WARNING:
 	case FACE_SUCCESS:
+	case FACE_FONT_LOCK_COMMENT:
 	case FACE_FONT_LOCK_KEYWORD:
 	case FACE_FONT_LOCK_FUNCTION_NAME:
 	case FACE_FONT_LOCK_TYPE:

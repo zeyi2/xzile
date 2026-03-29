@@ -90,9 +90,8 @@ public TerminalCapabilities term_get_capabilities () {
 
 static int allocate_color_pair (int foreground, int background) {
 	string key = "%d:%d".printf (foreground, background);
-	int? cached = color_pair_cache[key];
-	if (cached != null)
-		return (int) cached;
+	if (color_pair_cache.has_key (key))
+		return color_pair_cache.get (key);
 
 	if (terminal_capabilities.color_pair_count > 0
 		&& next_color_pair >= terminal_capabilities.color_pair_count)

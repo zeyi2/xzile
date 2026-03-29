@@ -50,6 +50,7 @@ src_xzile_SOURCE_FILES =				\
 	src/basic.vala					\
 	src/bind.vala					\
 	src/buffer.vala					\
+	src/c_highlighter.vala			\
 	src/utf8.vala					\
 	src/completion.vala				\
 	src/eval.vala					\
