@@ -1,4 +1,9 @@
+
 # XZile
+
+![XZile](pic/peace.jpg)
+
+> The soul is the witness.
 
 XZile is a fork of [GNU Zile](https://www.gnu.org/s/zile/) with additional features. It remains a small, fast, lightweight Emacs clone for the terminal.
 
