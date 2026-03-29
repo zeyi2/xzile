@@ -573,6 +573,17 @@ static void define_terminal_default_theme () {
 	set_builtin_face (theme, make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
 }
 
+string? minibuf_read_theme_name (string fmt, ...) {
+	Completion cp = new Completion (false);
+	theme_table.@foreach ((name, theme) => {
+			cp.completions.add (name);
+		});
+
+	return Minibuf.vread_completion (fmt, "", cp, null,
+									 "No theme name given",
+									 "Undefined theme `%s'", va_list ());
+}
+
 public void theme_init () {
 	face_name_table = new HashTable<string, string> (str_hash, str_equal);
 	theme_table = new HashTable<string, Theme> (str_hash, str_equal);
@@ -582,4 +593,31 @@ public void theme_init () {
 	define_default_light_theme ();
 	define_terminal_default_theme ();
 	activate_theme (THEME_TERMINAL_DEFAULT);
+
+	new LispFunc (
+		"load-theme",
+		(uniarg, args) => {
+			string? theme_name = args != null ? args.poll () : null;
+			if (theme_name == null)
+				theme_name = minibuf_read_theme_name ("Load theme: ");
+			if (theme_name == null)
+				return false;
+			if (!activate_theme (theme_name)) {
+				Minibuf.error ("Undefined theme `%s'", theme_name);
+				return false;
+			}
+
+			if (cur_wp != null) {
+				term_clear ();
+				term_redisplay ();
+				term_refresh ();
+			}
+			Minibuf.write ("Loaded theme `%s'", theme_name);
+			return true;
+		},
+		true,
+		"""Load and enable the theme named THEME.
+
+Interactively, prompt for one of the registered theme names."""
+		);
 }
