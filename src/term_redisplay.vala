@@ -59,11 +59,11 @@ string make_char_printable (uint32 ch, size_t x, size_t cur_tab_width) {
  */
 void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 				size_t o, Region? r, bool highlight, size_t cur_tab_width,
-				string gutter_str, size_t gutter_width) {
+				string gutter_str, size_t gutter_width, string gutter_face_name) {
 	term_move (line, leftcol);
 
 	if (gutter_width > 0) {
-		term_attrset (FONT_NORMAL);
+		term_apply_face (gutter_face_name);
 		term_addstr (gutter_str);
 		term_move (line, leftcol + gutter_width);
 	}
@@ -312,8 +312,11 @@ void draw_window (size_t topline, size_t leftcol, Window wp) {
 		}
 
 		string gutter_str = "";
+		string gutter_face_name = FACE_LINE_NUMBER;
 		if (gutter_width > 0) {
 			long num_to_show = 0;
+			if (line_idx == current_line)
+				gutter_face_name = FACE_LINE_NUMBER_CURRENT_LINE;
 			if (rel_mode) {
 				if (line_idx == current_line)
 					num_to_show = (long) line_idx + 1;
@@ -327,7 +330,7 @@ void draw_window (size_t topline, size_t leftcol, Window wp) {
 			gutter_str = "%*ld ".printf ((int) (gutter_width - 1), num_to_show);
 		}
 
-		draw_line (i, leftcol, wp.start_column, wp, o, r, highlight, cur_tab_width, gutter_str, gutter_width);
+		draw_line (i, leftcol, wp.start_column, wp, o, r, highlight, cur_tab_width, gutter_str, gutter_width, gutter_face_name);
 
 		if (wp.start_column > 0) {
 			term_move (i, leftcol + gutter_width);
