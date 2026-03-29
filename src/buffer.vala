@@ -38,6 +38,97 @@ public class Buffer {
 	public bool isearch;		/* The buffer is in Isearch loop. */
 	public bool mark_active;	/* The mark is active. */
 	public string dir;			/* The default directory. */
+	private SyntaxHighlighter? _highlighter;
+	public SyntaxHighlighter? highlighter {
+		get { return _highlighter; }
+		set {
+			if (_highlighter == value)
+				return;
+			_highlighter = value;
+			reset_syntax_cache ();
+		}
+	}
+
+	private Gee.HashMap<int, int>? syntax_state_cache;
+	private int syntax_valid_upto = 0;
+	private size_t syntax_valid_offset = 0;
+
+	private void reset_syntax_cache () {
+		syntax_state_cache = null;
+		syntax_valid_upto = 0;
+		syntax_valid_offset = 0;
+	}
+
+	public int get_line_start_state (int line_idx) {
+		if (highlighter == null)
+			return SYNTAX_STATE_NORMAL;
+
+		if (syntax_state_cache == null) {
+			syntax_state_cache = new Gee.HashMap<int, int> ();
+			syntax_valid_upto = 0;
+			syntax_valid_offset = 0;
+			syntax_state_cache.set (0, SYNTAX_STATE_NORMAL);
+		}
+
+		if (line_idx > syntax_valid_upto)
+			update_syntax_cache (line_idx);
+
+		if (syntax_state_cache.has_key (line_idx))
+			return syntax_state_cache.get (line_idx);
+
+		return SYNTAX_STATE_NORMAL;
+	}
+
+	private void update_syntax_cache (int target_line) {
+		int state = SYNTAX_STATE_NORMAL;
+
+		if (syntax_state_cache == null || highlighter == null)
+			return;
+
+		if (syntax_valid_upto == 0) {
+			state = SYNTAX_STATE_NORMAL;
+			syntax_valid_offset = 0;
+			syntax_state_cache.set (0, SYNTAX_STATE_NORMAL);
+		} else if (syntax_state_cache.has_key (syntax_valid_upto)) {
+			state = syntax_state_cache.get (syntax_valid_upto);
+		} else {
+			state = SYNTAX_STATE_NORMAL;
+			syntax_valid_upto = 0;
+			syntax_valid_offset = 0;
+			syntax_state_cache.set (0, SYNTAX_STATE_NORMAL);
+		}
+
+		size_t o = syntax_valid_offset;
+		string?[]? dummy_faces = null;
+
+		for (int i = syntax_valid_upto; i < target_line; i++) {
+			size_t next_o = next_line (o);
+			if (next_o == size_t.MAX)
+				break;
+
+			size_t line_len = end_of_line (o) - start_of_line (o);
+			if (dummy_faces == null || dummy_faces.length < line_len)
+				dummy_faces = new string?[(int) line_len + 128];
+
+			state = highlighter.scan_line (this, i, o, line_len, state, dummy_faces);
+			o = next_o;
+			syntax_state_cache.set (i + 1, state);
+		}
+
+		syntax_valid_upto = target_line;
+		syntax_valid_offset = o;
+	}
+
+	private void invalidate_syntax_cache_at (size_t o) {
+		if (highlighter == null || syntax_state_cache == null)
+			return;
+
+		int line_idx = (int) offset_to_line (o);
+		if (line_idx < syntax_valid_upto) {
+			syntax_valid_upto = line_idx;
+			syntax_valid_offset = start_of_line (o);
+		}
+	}
 
 	private size_t _pt;			/* The point. */
 	public size_t pt  {
@@ -175,6 +266,8 @@ public class Buffer {
 	public bool replace_estr (size_t del, ImmutableEstr es) {
 		if (warn_if_readonly ())
 			return false;
+
+		invalidate_syntax_cache_at (pt);
 
 		size_t newlen = es.len_with_eol (eol);
 		undo_save_block (pt, del, newlen);

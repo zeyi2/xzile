@@ -72,6 +72,7 @@ src_xzile_SOURCE_FILES =				\
 	src/registers.vala				\
 	src/search.vala					\
 	src/shell.vala					\
+	src/syntax.vala				\
 	src/tbl_opts.vala				\
 	src/tbl_vars.vala				\
 	src/term_curses.vala			\
