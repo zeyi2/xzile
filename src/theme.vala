@@ -586,6 +586,124 @@ string? minibuf_read_theme_name (string fmt, ...) {
 									 "Undefined theme `%s'", va_list ());
 }
 
+static bool is_lisp_nil (string value) {
+	return value == "nil";
+}
+
+static bool is_lisp_unspecified (string value) {
+	return value == "unspecified";
+}
+
+static FaceSpec copy_theme_face_for_edit (Theme theme, string face_name) throws ThemeError {
+	require_registered_face_name (face_name);
+
+	FaceSpec face = new FaceSpec (face_name);
+	FaceSpec? existing = theme.lookup_face (face_name);
+	if (existing == null)
+		return face;
+
+	face.inherit_name = existing.inherit_name;
+	face.foreground = existing.foreground;
+	face.background = existing.background;
+	face.bold = existing.bold;
+	face.underline = existing.underline;
+	face.reverse = existing.reverse;
+	face.has_foreground = existing.has_foreground;
+	face.has_background = existing.has_background;
+	face.has_bold = existing.has_bold;
+	face.has_underline = existing.has_underline;
+	face.has_reverse = existing.has_reverse;
+	return face;
+}
+
+static bool apply_face_attribute (FaceSpec face,
+								  string attr_name,
+								  string attr_value,
+								  out string? error_message) {
+	error_message = null;
+	switch (attr_name) {
+	case ":foreground":
+	case ":fg":
+		if (is_lisp_nil (attr_value) || is_lisp_unspecified (attr_value)) {
+			face.foreground = null;
+			face.has_foreground = false;
+		} else {
+			face.foreground = attr_value;
+			face.has_foreground = true;
+		}
+		return true;
+	case ":background":
+	case ":bg":
+		if (is_lisp_nil (attr_value) || is_lisp_unspecified (attr_value)) {
+			face.background = null;
+			face.has_background = false;
+		} else {
+			face.background = attr_value;
+			face.has_background = true;
+		}
+		return true;
+	case ":inherit":
+		face.inherit_name = is_lisp_nil (attr_value) || is_lisp_unspecified (attr_value)
+			? null
+			: attr_value;
+		return true;
+	case ":bold":
+		if (is_lisp_unspecified (attr_value))
+			face.has_bold = false;
+		else if (attr_value == "t") {
+			face.bold = true;
+			face.has_bold = true;
+		} else if (is_lisp_nil (attr_value)) {
+			face.bold = false;
+			face.has_bold = true;
+		} else {
+			error_message = "Face attribute `%s' must be t, nil, or unspecified".printf (attr_name);
+			return false;
+		}
+		return true;
+	case ":underline":
+		if (is_lisp_unspecified (attr_value))
+			face.has_underline = false;
+		else if (attr_value == "t") {
+			face.underline = true;
+			face.has_underline = true;
+		} else if (is_lisp_nil (attr_value)) {
+			face.underline = false;
+			face.has_underline = true;
+		} else {
+			error_message = "Face attribute `%s' must be t, nil, or unspecified".printf (attr_name);
+			return false;
+		}
+		return true;
+	case ":reverse":
+		if (is_lisp_unspecified (attr_value))
+			face.has_reverse = false;
+		else if (attr_value == "t") {
+			face.reverse = true;
+			face.has_reverse = true;
+		} else if (is_lisp_nil (attr_value)) {
+			face.reverse = false;
+			face.has_reverse = true;
+		} else {
+			error_message = "Face attribute `%s' must be t, nil, or unspecified".printf (attr_name);
+			return false;
+		}
+		return true;
+	default:
+		error_message = "Unknown face attribute `%s'".printf (attr_name);
+		return false;
+	}
+}
+
+static void refresh_theme_display () {
+	if (cur_wp == null)
+		return;
+
+	term_clear ();
+	term_redisplay ();
+	term_refresh ();
+}
+
 public void theme_init () {
 	face_name_table = new HashTable<string, string> (str_hash, str_equal);
 	theme_table = new HashTable<string, Theme> (str_hash, str_equal);
@@ -609,11 +727,7 @@ public void theme_init () {
 				return false;
 			}
 
-			if (cur_wp != null) {
-				term_clear ();
-				term_redisplay ();
-				term_refresh ();
-			}
+			refresh_theme_display ();
 			Minibuf.write ("Loaded theme `%s'", theme_name);
 			return true;
 		},
@@ -621,5 +735,57 @@ public void theme_init () {
 		"""Load and enable the theme named THEME.
 
 Interactively, prompt for one of the registered theme names."""
+		);
+
+	new LispFunc (
+		"set-face-attribute",
+		(uniarg, args) => {
+			if (args == null || args.is_empty) {
+				Minibuf.error ("set-face-attribute requires a face name");
+				return false;
+			}
+
+			Theme? theme = get_current_theme ();
+			if (theme == null) {
+				Minibuf.error ("No active theme");
+				return false;
+			}
+
+			string? face_name = args.poll ();
+			if (face_name == null) {
+				Minibuf.error ("set-face-attribute requires a face name");
+				return false;
+			}
+
+			try {
+				FaceSpec face = copy_theme_face_for_edit (theme, face_name);
+				while (!args.is_empty) {
+					string? attr_name = args.poll ();
+					string? attr_value = args.poll ();
+					if (attr_name == null || attr_value == null) {
+						Minibuf.error ("Face attribute `%s' requires a value", attr_name ?? "(null)");
+						return false;
+					}
+					string? error_message = null;
+					if (!apply_face_attribute (face, attr_name, attr_value, out error_message)) {
+						Minibuf.error ("%s", error_message);
+						return false;
+					}
+				}
+
+				theme.set_face (face);
+			} catch (ThemeError e) {
+				Minibuf.error ("%s", e.message);
+				return false;
+			}
+
+			refresh_theme_display ();
+			return true;
+		},
+		false,
+		"""Set attribute overrides for FACE in the current theme.
+
+Arguments are FACE followed by :ATTRIBUTE VALUE pairs such as
+:fg, :bg, :bold, :underline, :reverse, and :inherit."""
 		);
 }
