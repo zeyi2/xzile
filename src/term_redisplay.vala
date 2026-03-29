@@ -352,7 +352,7 @@ void draw_window (size_t topline, size_t leftcol, Window wp) {
 		string sep_str = right_has_linenum ? " |" : "| ";
 		for (size_t row = topline; row < topline + wp.fheight; ++row) {
 			term_move (row, sep_col);
-			term_attrset (FONT_NORMAL);
+			term_apply_face (FACE_VERTICAL_BORDER);
 			term_addstr (sep_str);
 		}
 	}
