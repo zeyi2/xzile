@@ -173,6 +173,32 @@ int write_all (int fd, char *data, size_t length)
 	return 0;
 }
 
+static bool buffer_has_final_eol (Buffer bp) {
+	if (bp.length == 0)
+		return true;
+	if (bp.length < bp.eol.length)
+		return false;
+
+	size_t start = bp.length - bp.eol.length;
+	for (size_t i = 0; i < bp.eol.length; i++)
+		if (bp.get_char (start + i) != bp.eol[(long) i])
+			return false;
+	return true;
+}
+
+static void ensure_buffer_final_eol (Buffer bp) {
+	if (buffer_has_final_eol (bp))
+		return;
+
+	size_t old_pt = bp.pt;
+	bool old_readonly = bp.readonly;
+	bp.readonly = false;
+	bp.goto_offset (bp.length);
+	bp.insert_estr (ImmutableEstr.of (bp.eol, bp.eol.length, bp.eol));
+	bp.goto_offset (size_t.min (old_pt, bp.length));
+	bp.readonly = old_readonly;
+}
+
 /*
  * Write buffer to given file name with given mode.
  */
@@ -187,6 +213,8 @@ int write_to_disk (Buffer bp, string filename, mode_t mode) {
 		es = bp.post_point ();
 		ret = write_all (fd, es.text, es.length);
 	}
+	if (ret == 0 && !buffer_has_final_eol (bp))
+		ret = write_all (fd, (char *) bp.eol, bp.eol.length);
 
 	if (close (fd) < 0 && ret == 0)
 		ret = -1;
@@ -305,6 +333,7 @@ bool write_buffer (Buffer bp, bool needname, bool confirm, string? name0, string
 		bp.temporary = false;
 		bp.nosave = false;
 		if (backup_and_write (bp, name)) {
+			ensure_buffer_final_eol (bp);
 			Minibuf.write ("Wrote %s", name);
 			bp.modified = false;
 			undo_set_unchanged (bp.last_undop);
