@@ -34,6 +34,11 @@ public const int TERM_COLOR_DEFAULT = -1;
 public const int TERM_COLOR_BLACK = 0;
 public const int TERM_COLOR_WHITE = 7;
 
+public errordomain ThemeError {
+	UNKNOWN_FACE,
+	INHERITANCE_CYCLE,
+}
+
 public class TerminalCapabilities {
 	public bool has_colors { get; set; default = false; }
 	public bool supports_default_colors { get; set; default = false; }
@@ -108,10 +113,10 @@ public class Theme {
 		this.faces = new HashTable<string, FaceSpec> (str_hash, str_equal);
 	}
 
-	public void set_face (FaceSpec face) {
-		assert_registered_face_name (face.name);
+	public void set_face (FaceSpec face) throws ThemeError {
+		require_registered_face_name (face.name);
 		if (face.inherit_name != null)
-			assert_registered_face_name ((string) face.inherit_name);
+			require_registered_face_name ((string) face.inherit_name);
 		faces.insert (face.name, face);
 	}
 
@@ -132,8 +137,9 @@ public bool face_name_exists (string name) {
 	return face_name_table.lookup (name) != null;
 }
 
-static void assert_registered_face_name (string name) {
-	assert (face_name_exists (name));
+static void require_registered_face_name (string name) throws ThemeError {
+	if (!face_name_exists (name))
+		throw new ThemeError.UNKNOWN_FACE ("Unknown face `%s'".printf (name));
 }
 
 public Theme define_theme (string name, string? variant = null) {
@@ -194,9 +200,9 @@ static void merge_face_spec (ResolvedFace resolved, FaceSpec face) {
 static void resolve_face_into (Theme? theme,
 							   string face_name,
 							   HashTable<string, string> seen,
-							   ResolvedFace resolved) {
+							   ResolvedFace resolved) throws ThemeError {
 	if (seen.lookup (face_name) != null)
-		return;
+		throw new ThemeError.INHERITANCE_CYCLE ("Inheritance cycle detected at face `%s'".printf (face_name));
 	seen.insert (face_name, face_name);
 
 	FaceSpec? face = theme != null ? theme.lookup_face (face_name) : null;
@@ -212,10 +218,12 @@ static void resolve_face_into (Theme? theme,
 
 	if (face != null)
 		merge_face_spec (resolved, face);
+
+	seen.remove (face_name);
 }
 
-public ResolvedFace resolve_face (string face_name, Theme? theme = null) {
-	assert_registered_face_name (face_name);
+public ResolvedFace resolve_face (string face_name, Theme? theme = null) throws ThemeError {
+	require_registered_face_name (face_name);
 
 	if (theme == null)
 		theme = current_theme;
@@ -353,13 +361,14 @@ static void populate_default_color_fallbacks (TerminalStyle style, Theme? theme)
 
 public TerminalStyle resolve_terminal_style (string face_name,
 											 Theme? theme = null,
-											 TerminalCapabilities? capabilities = null) {
+											 TerminalCapabilities? capabilities = null) throws ThemeError {
 	TerminalCapabilities resolved_capabilities =
 		capabilities != null ? capabilities : term_get_capabilities ();
+	Theme? resolved_theme = theme != null ? theme : current_theme;
 
-	ResolvedFace resolved = resolve_face (face_name, theme);
+	ResolvedFace resolved = resolve_face (face_name, resolved_theme);
 	TerminalStyle style = new TerminalStyle (face_name);
-	populate_default_color_fallbacks (style, theme);
+	populate_default_color_fallbacks (style, resolved_theme);
 
 	style.bold = resolved.bold;
 	style.underline = resolved_capabilities.supports_underline && resolved.underline;
@@ -432,6 +441,14 @@ static FaceSpec make_face (string name,
 	return face;
 }
 
+static void set_builtin_face (Theme theme, FaceSpec face) {
+	try {
+		theme.set_face (face);
+	} catch (ThemeError e) {
+		assert_not_reached ();
+	}
+}
+
 static void define_builtin_faces () {
 	string[] builtin_faces = {
 		FACE_DEFAULT,
@@ -468,91 +485,91 @@ static void define_builtin_faces () {
 static void define_default_dark_theme () {
 	Theme theme = define_theme (THEME_DEFAULT_DARK, "dark");
 
-	theme.set_face (make_face (FACE_DEFAULT, "default", "default"));
-	theme.set_face (make_face (FACE_REGION, null, "blue"));
-	theme.set_face (make_face (FACE_MODE_LINE, "black", "cyan", null, true));
-	theme.set_face (make_face (FACE_MODE_LINE_INACTIVE, "white", "blue", FACE_MODE_LINE, false));
-	theme.set_face (make_face (FACE_MINIBUFFER_PROMPT, "cyan", null, null, true));
-	theme.set_face (make_face (FACE_VERTICAL_BORDER, "brightblack"));
-	theme.set_face (make_face (FACE_LINE_NUMBER, "brightblack"));
-	theme.set_face (make_face (FACE_LINE_NUMBER_CURRENT_LINE, "white", null, FACE_LINE_NUMBER, true));
-	theme.set_face (make_face (FACE_TRAILING_WHITESPACE, null, "red"));
-	theme.set_face (make_face (FACE_ISEARCH, "black", "yellow", null, true));
-	theme.set_face (make_face (FACE_LAZY_HIGHLIGHT, null, "blue"));
-	theme.set_face (make_face (FACE_MATCH, "black", "green"));
-	theme.set_face (make_face (FACE_ERROR, "red", null, null, true));
-	theme.set_face (make_face (FACE_WARNING, "yellow", null, null, true));
-	theme.set_face (make_face (FACE_SUCCESS, "green", null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_COMMENT, "brightblack"));
-	theme.set_face (make_face (FACE_FONT_LOCK_STRING, "green"));
-	theme.set_face (make_face (FACE_FONT_LOCK_KEYWORD, "cyan", null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_FUNCTION_NAME, "blue"));
-	theme.set_face (make_face (FACE_FONT_LOCK_VARIABLE_NAME, "default"));
-	theme.set_face (make_face (FACE_FONT_LOCK_TYPE, "magenta"));
-	theme.set_face (make_face (FACE_FONT_LOCK_CONSTANT, "magenta"));
-	theme.set_face (make_face (FACE_FONT_LOCK_BUILTIN, "cyan"));
-	theme.set_face (make_face (FACE_FONT_LOCK_PREPROCESSOR, "yellow"));
-	theme.set_face (make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
+	set_builtin_face (theme, make_face (FACE_DEFAULT, "default", "default"));
+	set_builtin_face (theme, make_face (FACE_REGION, null, "blue"));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE, "black", "cyan", null, true));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE_INACTIVE, "white", "blue", FACE_MODE_LINE, false));
+	set_builtin_face (theme, make_face (FACE_MINIBUFFER_PROMPT, "cyan", null, null, true));
+	set_builtin_face (theme, make_face (FACE_VERTICAL_BORDER, "brightblack"));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER, "brightblack"));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER_CURRENT_LINE, "white", null, FACE_LINE_NUMBER, true));
+	set_builtin_face (theme, make_face (FACE_TRAILING_WHITESPACE, null, "red"));
+	set_builtin_face (theme, make_face (FACE_ISEARCH, "black", "yellow", null, true));
+	set_builtin_face (theme, make_face (FACE_LAZY_HIGHLIGHT, null, "blue"));
+	set_builtin_face (theme, make_face (FACE_MATCH, "black", "green"));
+	set_builtin_face (theme, make_face (FACE_ERROR, "red", null, null, true));
+	set_builtin_face (theme, make_face (FACE_WARNING, "yellow", null, null, true));
+	set_builtin_face (theme, make_face (FACE_SUCCESS, "green", null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_COMMENT, "brightblack"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_STRING, "green"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_KEYWORD, "cyan", null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_FUNCTION_NAME, "blue"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_VARIABLE_NAME, "default"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_TYPE, "magenta"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_CONSTANT, "magenta"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_BUILTIN, "cyan"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_PREPROCESSOR, "yellow"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
 }
 
 static void define_default_light_theme () {
 	Theme theme = define_theme (THEME_DEFAULT_LIGHT, "light");
 
-	theme.set_face (make_face (FACE_DEFAULT, "default", "default"));
-	theme.set_face (make_face (FACE_REGION, "black", "cyan"));
-	theme.set_face (make_face (FACE_MODE_LINE, "white", "blue", null, true));
-	theme.set_face (make_face (FACE_MODE_LINE_INACTIVE, "black", "white", FACE_MODE_LINE, false));
-	theme.set_face (make_face (FACE_MINIBUFFER_PROMPT, "blue", null, null, true));
-	theme.set_face (make_face (FACE_VERTICAL_BORDER, "blue"));
-	theme.set_face (make_face (FACE_LINE_NUMBER, "blue"));
-	theme.set_face (make_face (FACE_LINE_NUMBER_CURRENT_LINE, "black", null, FACE_LINE_NUMBER, true));
-	theme.set_face (make_face (FACE_TRAILING_WHITESPACE, null, "red"));
-	theme.set_face (make_face (FACE_ISEARCH, "black", "yellow", null, true));
-	theme.set_face (make_face (FACE_LAZY_HIGHLIGHT, null, "yellow"));
-	theme.set_face (make_face (FACE_MATCH, "white", "green"));
-	theme.set_face (make_face (FACE_ERROR, "red", null, null, true));
-	theme.set_face (make_face (FACE_WARNING, "magenta", null, null, true));
-	theme.set_face (make_face (FACE_SUCCESS, "green", null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_COMMENT, "magenta"));
-	theme.set_face (make_face (FACE_FONT_LOCK_STRING, "green"));
-	theme.set_face (make_face (FACE_FONT_LOCK_KEYWORD, "blue", null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_FUNCTION_NAME, "blue"));
-	theme.set_face (make_face (FACE_FONT_LOCK_VARIABLE_NAME, "default"));
-	theme.set_face (make_face (FACE_FONT_LOCK_TYPE, "magenta"));
-	theme.set_face (make_face (FACE_FONT_LOCK_CONSTANT, "magenta"));
-	theme.set_face (make_face (FACE_FONT_LOCK_BUILTIN, "blue"));
-	theme.set_face (make_face (FACE_FONT_LOCK_PREPROCESSOR, "red"));
-	theme.set_face (make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
+	set_builtin_face (theme, make_face (FACE_DEFAULT, "default", "default"));
+	set_builtin_face (theme, make_face (FACE_REGION, "black", "cyan"));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE, "white", "blue", null, true));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE_INACTIVE, "black", "white", FACE_MODE_LINE, false));
+	set_builtin_face (theme, make_face (FACE_MINIBUFFER_PROMPT, "blue", null, null, true));
+	set_builtin_face (theme, make_face (FACE_VERTICAL_BORDER, "blue"));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER, "blue"));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER_CURRENT_LINE, "black", null, FACE_LINE_NUMBER, true));
+	set_builtin_face (theme, make_face (FACE_TRAILING_WHITESPACE, null, "red"));
+	set_builtin_face (theme, make_face (FACE_ISEARCH, "black", "yellow", null, true));
+	set_builtin_face (theme, make_face (FACE_LAZY_HIGHLIGHT, null, "yellow"));
+	set_builtin_face (theme, make_face (FACE_MATCH, "white", "green"));
+	set_builtin_face (theme, make_face (FACE_ERROR, "red", null, null, true));
+	set_builtin_face (theme, make_face (FACE_WARNING, "magenta", null, null, true));
+	set_builtin_face (theme, make_face (FACE_SUCCESS, "green", null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_COMMENT, "magenta"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_STRING, "green"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_KEYWORD, "blue", null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_FUNCTION_NAME, "blue"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_VARIABLE_NAME, "default"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_TYPE, "magenta"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_CONSTANT, "magenta"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_BUILTIN, "blue"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_PREPROCESSOR, "red"));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
 }
 
 static void define_terminal_default_theme () {
 	Theme theme = define_theme (THEME_TERMINAL_DEFAULT, null);
 
-	theme.set_face (make_face (FACE_DEFAULT, "default", "default"));
-	theme.set_face (make_face (FACE_REGION, null, null, null, null, null, true));
-	theme.set_face (make_face (FACE_MODE_LINE, null, null, null, true, null, true));
-	theme.set_face (make_face (FACE_MODE_LINE_INACTIVE, null, null, FACE_MODE_LINE, false, true, null));
-	theme.set_face (make_face (FACE_MINIBUFFER_PROMPT, null, null, null, true));
-	theme.set_face (make_face (FACE_VERTICAL_BORDER));
-	theme.set_face (make_face (FACE_LINE_NUMBER));
-	theme.set_face (make_face (FACE_LINE_NUMBER_CURRENT_LINE, null, null, FACE_LINE_NUMBER, true));
-	theme.set_face (make_face (FACE_TRAILING_WHITESPACE, null, null, null, null, null, true));
-	theme.set_face (make_face (FACE_ISEARCH, null, null, null, true, null, true));
-	theme.set_face (make_face (FACE_LAZY_HIGHLIGHT, null, null, null, null, true));
-	theme.set_face (make_face (FACE_MATCH, null, null, null, null, true));
-	theme.set_face (make_face (FACE_ERROR, null, null, null, true));
-	theme.set_face (make_face (FACE_WARNING, null, null, null, null, true));
-	theme.set_face (make_face (FACE_SUCCESS, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_COMMENT));
-	theme.set_face (make_face (FACE_FONT_LOCK_STRING, null, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_KEYWORD, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_FUNCTION_NAME, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_VARIABLE_NAME));
-	theme.set_face (make_face (FACE_FONT_LOCK_TYPE, null, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_CONSTANT, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_BUILTIN, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_PREPROCESSOR, null, null, null, null, true));
-	theme.set_face (make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
+	set_builtin_face (theme, make_face (FACE_DEFAULT, "default", "default"));
+	set_builtin_face (theme, make_face (FACE_REGION, null, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE, null, null, null, true, null, true));
+	set_builtin_face (theme, make_face (FACE_MODE_LINE_INACTIVE, null, null, FACE_MODE_LINE, false, true, null));
+	set_builtin_face (theme, make_face (FACE_MINIBUFFER_PROMPT, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_VERTICAL_BORDER));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER));
+	set_builtin_face (theme, make_face (FACE_LINE_NUMBER_CURRENT_LINE, null, null, FACE_LINE_NUMBER, true));
+	set_builtin_face (theme, make_face (FACE_TRAILING_WHITESPACE, null, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_ISEARCH, null, null, null, true, null, true));
+	set_builtin_face (theme, make_face (FACE_LAZY_HIGHLIGHT, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_MATCH, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_ERROR, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_WARNING, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_SUCCESS, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_COMMENT));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_STRING, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_KEYWORD, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_FUNCTION_NAME, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_VARIABLE_NAME));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_TYPE, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_CONSTANT, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_BUILTIN, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_PREPROCESSOR, null, null, null, null, true));
+	set_builtin_face (theme, make_face (FACE_FONT_LOCK_WARNING, null, null, FACE_WARNING));
 }
 
 public void theme_init () {

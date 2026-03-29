@@ -146,7 +146,11 @@ public void term_apply_style (TerminalStyle style) {
 }
 
 public void term_apply_face (string face_name) {
-	term_apply_style (resolve_terminal_style (face_name));
+	try {
+		term_apply_style (resolve_terminal_style (face_name));
+	} catch (ThemeError e) {
+		term_attrset (FONT_NORMAL);
+	}
 }
 
 public void term_init () {
