@@ -516,7 +516,7 @@ static void define_default_dark_theme () {
 static void define_default_light_theme () {
 	Theme theme = define_theme (THEME_DEFAULT_LIGHT, "light");
 
-	set_builtin_face (theme, make_face (FACE_DEFAULT, "default", "default"));
+	set_builtin_face (theme, make_face (FACE_DEFAULT, "black", "white"));
 	set_builtin_face (theme, make_face (FACE_REGION, "black", "cyan"));
 	set_builtin_face (theme, make_face (FACE_MODE_LINE, "white", "blue", null, true));
 	set_builtin_face (theme, make_face (FACE_MODE_LINE_INACTIVE, "black", "white", FACE_MODE_LINE, false));
@@ -575,9 +575,11 @@ static void define_terminal_default_theme () {
 
 string? minibuf_read_theme_name (string fmt, ...) {
 	Completion cp = new Completion (false);
-	theme_table.@foreach ((name, theme) => {
-			cp.completions.add (name);
-		});
+	HashTableIter<string, Theme> iter = HashTableIter<string, Theme> (theme_table);
+	unowned string name;
+	unowned Theme theme;
+	while (iter.next (out name, out theme))
+		cp.completions.add (name);
 
 	return Minibuf.vread_completion (fmt, "", cp, null,
 									 "No theme name given",
