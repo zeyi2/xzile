@@ -234,7 +234,116 @@ public ResolvedFace resolve_face (string face_name, Theme? theme = null) throws 
 	return resolved;
 }
 
-static int lookup_terminal_color (string color_name) {
+static int parse_hex_nibble (char ch) {
+	if (ch >= '0' && ch <= '9')
+		return ch - '0';
+	if (ch >= 'a' && ch <= 'f')
+		return 10 + ch - 'a';
+	if (ch >= 'A' && ch <= 'F')
+		return 10 + ch - 'A';
+	return -1;
+}
+
+static bool parse_hex_color (string color_name, out int red, out int green, out int blue) {
+	red = green = blue = 0;
+	if (color_name.length != 7 || color_name[0] != '#')
+		return false;
+
+	int r1 = parse_hex_nibble (color_name[1]);
+	int r2 = parse_hex_nibble (color_name[2]);
+	int g1 = parse_hex_nibble (color_name[3]);
+	int g2 = parse_hex_nibble (color_name[4]);
+	int b1 = parse_hex_nibble (color_name[5]);
+	int b2 = parse_hex_nibble (color_name[6]);
+	if (r1 < 0 || r2 < 0 || g1 < 0 || g2 < 0 || b1 < 0 || b2 < 0)
+		return false;
+
+	red = (r1 << 4) | r2;
+	green = (g1 << 4) | g2;
+	blue = (b1 << 4) | b2;
+	return true;
+}
+
+static int color_distance_squared (int red_a, int green_a, int blue_a,
+								   int red_b, int green_b, int blue_b) {
+	int dr = red_a - red_b;
+	int dg = green_a - green_b;
+	int db = blue_a - blue_b;
+	return dr * dr + dg * dg + db * db;
+}
+
+static int nearest_ansi_color_16 (int red, int green, int blue) {
+	int[] reds = {
+		0, 205, 0, 205, 0, 205, 0, 229,
+		127, 255, 0, 255, 92, 255, 0, 255
+	};
+	int[] greens = {
+		0, 0, 205, 205, 0, 0, 205, 229,
+		127, 0, 255, 255, 92, 0, 255, 255
+	};
+	int[] blues = {
+		0, 0, 0, 0, 238, 205, 205, 229,
+		127, 0, 0, 0, 255, 255, 255, 255
+	};
+
+	int best_color = 0;
+	int best_distance = int.MAX;
+	for (int i = 0; i < 16; i++) {
+		int distance = color_distance_squared (red, green, blue, reds[i], greens[i], blues[i]);
+		if (distance < best_distance) {
+			best_distance = distance;
+			best_color = i;
+		}
+	}
+
+	return best_color;
+}
+
+static int nearest_xterm_cube_level (int component) {
+	int[] levels = { 0, 95, 135, 175, 215, 255 };
+	int best_index = 0;
+	int best_distance = int.MAX;
+	for (int i = 0; i < levels.length; i++) {
+		int distance = component - levels[i];
+		distance = distance * distance;
+		if (distance < best_distance) {
+			best_distance = distance;
+			best_index = i;
+		}
+	}
+	return best_index;
+}
+
+static int rgb_to_xterm_256 (int red, int green, int blue) {
+	int[] levels = { 0, 95, 135, 175, 215, 255 };
+	int red_index = nearest_xterm_cube_level (red);
+	int green_index = nearest_xterm_cube_level (green);
+	int blue_index = nearest_xterm_cube_level (blue);
+	int cube_red = levels[red_index];
+	int cube_green = levels[green_index];
+	int cube_blue = levels[blue_index];
+	int cube_color = 16 + 36 * red_index + 6 * green_index + blue_index;
+	int cube_distance = color_distance_squared (red, green, blue, cube_red, cube_green, cube_blue);
+
+	int grayscale_index = 0;
+	int grayscale_value = 8;
+	int grayscale_distance = int.MAX;
+	for (int i = 0; i < 24; i++) {
+		int value = 8 + 10 * i;
+		int distance = color_distance_squared (red, green, blue, value, value, value);
+		if (distance < grayscale_distance) {
+			grayscale_distance = distance;
+			grayscale_index = i;
+			grayscale_value = value;
+		}
+	}
+
+	if (grayscale_distance < cube_distance)
+		return 232 + grayscale_index;
+	return cube_color;
+}
+
+static int lookup_named_terminal_color (string color_name) {
 	switch (color_name) {
 	case "default":
 		return TERM_COLOR_DEFAULT;
@@ -275,6 +384,20 @@ static int lookup_terminal_color (string color_name) {
 	default:
 		return TERM_COLOR_UNSPECIFIED;
 	}
+}
+
+static int lookup_terminal_color (string color_name, TerminalCapabilities capabilities) {
+	int named_color = lookup_named_terminal_color (color_name);
+	if (named_color != TERM_COLOR_UNSPECIFIED)
+		return named_color;
+
+	int red, green, blue;
+	if (!parse_hex_color (color_name, out red, out green, out blue))
+		return TERM_COLOR_UNSPECIFIED;
+
+	if (capabilities.color_count >= 256)
+		return rgb_to_xterm_256 (red, green, blue);
+	return nearest_ansi_color_16 (red, green, blue);
 }
 
 static int normalize_terminal_color (int color,
@@ -382,7 +505,7 @@ public TerminalStyle resolve_terminal_style (string face_name,
 
 	if (resolved.has_foreground && resolved.foreground != null) {
 		int fg = normalize_terminal_color (
-			lookup_terminal_color ((string) resolved.foreground),
+			lookup_terminal_color ((string) resolved.foreground, resolved_capabilities),
 			true,
 			resolved_capabilities,
 			style);
@@ -394,7 +517,7 @@ public TerminalStyle resolve_terminal_style (string face_name,
 
 	if (resolved.has_background && resolved.background != null) {
 		int bg = normalize_terminal_color (
-			lookup_terminal_color ((string) resolved.background),
+			lookup_terminal_color ((string) resolved.background, resolved_capabilities),
 			false,
 			resolved_capabilities,
 			style);
@@ -716,6 +839,42 @@ static bool apply_face_attributes_from_args (FaceSpec face,
 	return true;
 }
 
+static bool apply_theme_attributes_from_args (Theme theme,
+											  Gee.Queue<string>? args,
+											  out string? error_message) {
+	error_message = null;
+	if (args == null)
+		return true;
+
+	while (!args.is_empty) {
+		string? attr_name = args.poll ();
+		string? attr_value = args.poll ();
+		if (attr_name == null || attr_value == null) {
+			error_message = "Theme attribute `%s' requires a value".printf (attr_name ?? "(null)");
+			return false;
+		}
+
+		switch (attr_name) {
+		case ":variant":
+			if (is_lisp_nil (attr_value) || is_lisp_unspecified (attr_value))
+				theme.variant = null;
+			else if (attr_value == "light" || attr_value == "dark")
+				theme.variant = attr_value;
+			else {
+				error_message = "Theme attribute `%s' must be light, dark, nil, or unspecified"
+					.printf (attr_name);
+				return false;
+			}
+			break;
+		default:
+			error_message = "Unknown theme attribute `%s'".printf (attr_name);
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static void refresh_theme_display () {
 	if (cur_wp == null)
 		return;
@@ -734,6 +893,44 @@ public void theme_init () {
 	define_default_light_theme ();
 	define_terminal_default_theme ();
 	activate_theme (THEME_TERMINAL_DEFAULT);
+
+	new LispFunc (
+		"define-theme",
+		(uniarg, args) => {
+			if (args == null || args.is_empty) {
+				Minibuf.error ("define-theme requires a theme name");
+				return false;
+			}
+
+			string? theme_name = args.poll ();
+			if (theme_name == null) {
+				Minibuf.error ("define-theme requires a theme name");
+				return false;
+			}
+
+			Theme theme = new Theme (theme_name);
+			string? error_message = null;
+			if (!apply_theme_attributes_from_args (theme, args, out error_message)) {
+				Minibuf.error ("%s", error_message);
+				return false;
+			}
+
+			Theme? previously_active_theme = get_current_theme ();
+			bool preserve_active_display =
+				previously_active_theme != null
+				&& previously_active_theme.name == theme_name;
+
+			define_theme (theme_name, theme.variant);
+			if (preserve_active_display)
+				current_theme = previously_active_theme;
+			return true;
+		},
+		false,
+		"""Define or replace the theme named THEME.
+
+Arguments are THEME followed by optional :ATTRIBUTE VALUE pairs.
+Currently only :variant is supported."""
+		);
 
 	new LispFunc (
 		"load-theme",
