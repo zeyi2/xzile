@@ -92,7 +92,7 @@ void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 		}
 
 		bool in_highlight = highlight && r != null && r.contains (o + i);
-		term_attrset (in_highlight ? FONT_REVERSE : FONT_NORMAL);
+		term_apply_face (in_highlight ? FACE_REGION : FACE_DEFAULT);
 
 		if (col < startcol) {
 			col += w;
@@ -143,13 +143,13 @@ void draw_line (size_t line, size_t leftcol, size_t startcol, Window wp,
 	/* Draw end-of-line indicator or padding. */
 	if (x >= ew) {
 		term_move (line, leftcol + gutter_width + ew - 1);
-		term_attrset (FONT_NORMAL);
+		term_apply_face (FACE_DEFAULT);
 		term_addstr ("$");
 	} else {
-		term_attrset (FONT_NORMAL);
+		term_apply_face (FACE_DEFAULT);
 		term_addstr ("%*s".printf ((int) (ew - x), ""));
 	}
-	term_attrset (FONT_NORMAL);
+	term_apply_face (FACE_DEFAULT);
 }
 
 bool calculate_highlight_region (Window wp, out Region *rp) {
