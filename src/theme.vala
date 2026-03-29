@@ -29,6 +29,50 @@ public const string FACE_FONT_LOCK_WARNING = "font-lock-warning-face";
 public const string THEME_DEFAULT_DARK = "default-dark";
 public const string THEME_DEFAULT_LIGHT = "default-light";
 public const string THEME_TERMINAL_DEFAULT = "terminal-default";
+public const int TERM_COLOR_UNSPECIFIED = -2;
+public const int TERM_COLOR_DEFAULT = -1;
+
+public class TerminalCapabilities {
+	public bool has_colors { get; set; default = false; }
+	public bool supports_default_colors { get; set; default = false; }
+	public bool supports_reverse { get; set; default = true; }
+	public bool supports_underline { get; set; default = true; }
+	public int color_count { get; set; default = 0; }
+	public int color_pair_count { get; set; default = 0; }
+}
+
+public class ResolvedFace {
+	public string name { get; private set; }
+	public string? foreground;
+	public string? background;
+	public bool bold;
+	public bool underline;
+	public bool reverse;
+	public bool has_foreground;
+	public bool has_background;
+	public bool has_bold;
+	public bool has_underline;
+	public bool has_reverse;
+
+	public ResolvedFace (string name) {
+		this.name = name;
+	}
+}
+
+public class TerminalStyle {
+	public string face_name { get; private set; }
+	public int foreground = TERM_COLOR_UNSPECIFIED;
+	public int background = TERM_COLOR_UNSPECIFIED;
+	public bool bold;
+	public bool underline;
+	public bool reverse;
+	public bool has_foreground;
+	public bool has_background;
+
+	public TerminalStyle (string face_name) {
+		this.face_name = face_name;
+	}
+}
 
 public class FaceSpec {
 	public string name { get; private set; }
@@ -118,6 +162,224 @@ public Theme? get_current_theme () {
 
 public unowned string? get_current_theme_name () {
 	return current_theme != null ? current_theme.name : null;
+}
+
+static void merge_face_spec (ResolvedFace resolved, FaceSpec face) {
+	if (face.has_foreground) {
+		resolved.foreground = face.foreground;
+		resolved.has_foreground = true;
+	}
+	if (face.has_background) {
+		resolved.background = face.background;
+		resolved.has_background = true;
+	}
+	if (face.has_bold) {
+		resolved.bold = face.bold;
+		resolved.has_bold = true;
+	}
+	if (face.has_underline) {
+		resolved.underline = face.underline;
+		resolved.has_underline = true;
+	}
+	if (face.has_reverse) {
+		resolved.reverse = face.reverse;
+		resolved.has_reverse = true;
+	}
+}
+
+static void resolve_face_into (Theme? theme,
+							   string face_name,
+							   HashTable<string, string> seen,
+							   ResolvedFace resolved) {
+	if (seen.lookup (face_name) != null)
+		return;
+	seen.insert (face_name, face_name);
+
+	FaceSpec? face = theme != null ? theme.lookup_face (face_name) : null;
+	string? inherit_name = null;
+
+	if (face != null && face.inherit_name != null)
+		inherit_name = face.inherit_name;
+	else if (face_name != FACE_DEFAULT)
+		inherit_name = FACE_DEFAULT;
+
+	if (inherit_name != null)
+		resolve_face_into (theme, inherit_name, seen, resolved);
+
+	if (face != null)
+		merge_face_spec (resolved, face);
+}
+
+public ResolvedFace resolve_face (string face_name, Theme? theme = null) {
+	assert_registered_face_name (face_name);
+
+	if (theme == null)
+		theme = current_theme;
+
+	ResolvedFace resolved = new ResolvedFace (face_name);
+	var seen = new HashTable<string, string> (str_hash, str_equal);
+	resolve_face_into (theme, face_name, seen, resolved);
+	return resolved;
+}
+
+static int lookup_terminal_color (string color_name) {
+	switch (color_name) {
+	case "default":
+		return TERM_COLOR_DEFAULT;
+	case "black":
+		return 0;
+	case "red":
+		return 1;
+	case "green":
+		return 2;
+	case "yellow":
+		return 3;
+	case "blue":
+		return 4;
+	case "magenta":
+		return 5;
+	case "cyan":
+		return 6;
+	case "white":
+		return 7;
+	case "brightblack":
+	case "gray":
+	case "grey":
+		return 8;
+	case "brightred":
+		return 9;
+	case "brightgreen":
+		return 10;
+	case "brightyellow":
+		return 11;
+	case "brightblue":
+		return 12;
+	case "brightmagenta":
+		return 13;
+	case "brightcyan":
+		return 14;
+	case "brightwhite":
+		return 15;
+	default:
+		return TERM_COLOR_UNSPECIFIED;
+	}
+}
+
+static int normalize_terminal_color (int color,
+									 bool is_foreground,
+									 TerminalCapabilities capabilities,
+									 TerminalStyle style) {
+	if (color == TERM_COLOR_DEFAULT)
+		return capabilities.supports_default_colors ? color : TERM_COLOR_UNSPECIFIED;
+
+	if (color < 0)
+		return TERM_COLOR_UNSPECIFIED;
+
+	if (!capabilities.has_colors || capabilities.color_count <= 0)
+		return TERM_COLOR_UNSPECIFIED;
+
+	if (capabilities.color_count >= 16)
+		return color;
+
+	if (capabilities.color_count >= 8) {
+		if (color >= 8) {
+			if (is_foreground)
+				style.bold = true;
+			return color - 8;
+		}
+		return color;
+	}
+
+	return TERM_COLOR_UNSPECIFIED;
+}
+
+static void apply_mono_fallback (string face_name,
+								 TerminalCapabilities capabilities,
+								 TerminalStyle style) {
+	switch (face_name) {
+	case FACE_REGION:
+	case FACE_ISEARCH:
+	case FACE_MATCH:
+	case FACE_TRAILING_WHITESPACE:
+	case FACE_MODE_LINE:
+		if (capabilities.supports_reverse)
+			style.reverse = true;
+		else if (capabilities.supports_underline)
+			style.underline = true;
+		else
+			style.bold = true;
+		break;
+	case FACE_LAZY_HIGHLIGHT:
+	case FACE_MODE_LINE_INACTIVE:
+	case FACE_MINIBUFFER_PROMPT:
+	case FACE_LINE_NUMBER_CURRENT_LINE:
+	case FACE_ERROR:
+	case FACE_WARNING:
+	case FACE_SUCCESS:
+	case FACE_FONT_LOCK_KEYWORD:
+	case FACE_FONT_LOCK_FUNCTION_NAME:
+	case FACE_FONT_LOCK_TYPE:
+	case FACE_FONT_LOCK_CONSTANT:
+	case FACE_FONT_LOCK_BUILTIN:
+	case FACE_FONT_LOCK_PREPROCESSOR:
+	case FACE_FONT_LOCK_WARNING:
+		if (capabilities.supports_underline)
+			style.underline = true;
+		else
+			style.bold = true;
+		break;
+	case FACE_FONT_LOCK_STRING:
+		if (capabilities.supports_underline)
+			style.underline = true;
+		break;
+	default:
+		break;
+	}
+}
+
+public TerminalStyle resolve_terminal_style (string face_name,
+											 Theme? theme = null,
+											 TerminalCapabilities? capabilities = null) {
+	TerminalCapabilities resolved_capabilities =
+		capabilities != null ? capabilities : term_get_capabilities ();
+
+	ResolvedFace resolved = resolve_face (face_name, theme);
+	TerminalStyle style = new TerminalStyle (face_name);
+
+	style.bold = resolved.bold;
+	style.underline = resolved_capabilities.supports_underline && resolved.underline;
+	style.reverse = resolved_capabilities.supports_reverse && resolved.reverse;
+
+	if (!resolved_capabilities.has_colors) {
+		apply_mono_fallback (face_name, resolved_capabilities, style);
+		return style;
+	}
+
+	if (resolved.has_foreground && resolved.foreground != null) {
+		int fg = normalize_terminal_color (
+			lookup_terminal_color ((string) resolved.foreground),
+			true,
+			resolved_capabilities,
+			style);
+		if (fg != TERM_COLOR_UNSPECIFIED) {
+			style.foreground = fg;
+			style.has_foreground = true;
+		}
+	}
+
+	if (resolved.has_background && resolved.background != null) {
+		int bg = normalize_terminal_color (
+			lookup_terminal_color ((string) resolved.background),
+			false,
+			resolved_capabilities,
+			style);
+		if (bg != TERM_COLOR_UNSPECIFIED) {
+			style.background = bg;
+			style.has_background = true;
+		}
+	}
+
+	return style;
 }
 
 static FaceSpec make_face (string name,

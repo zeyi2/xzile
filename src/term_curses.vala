@@ -25,8 +25,11 @@ using Curses;
 // from ncurses
 [CCode (cname = "define_key")]
 extern int define_key (string definition, int keycode);
+[CCode (cname = "use_default_colors")]
+extern int use_default_colors ();
 
 static Gee.List<Keystroke> key_buf;
+static TerminalCapabilities terminal_capabilities;
 
 static Keystroke backspace_code = 0177;
 
@@ -79,6 +82,10 @@ public size_t term_height () {
 	return (size_t) LINES;
 }
 
+public TerminalCapabilities term_get_capabilities () {
+	return terminal_capabilities;
+}
+
 public void term_init () {
 	initscr ();
 	noecho ();
@@ -87,6 +94,20 @@ public void term_init () {
 	stdscr.meta (true);
 	stdscr.intrflush (false);
 	stdscr.keypad (true);
+
+	terminal_capabilities = new TerminalCapabilities ();
+	// FIXME: These are conservative backend assumptions for now, not
+	// runtime-detected capabilities.
+	terminal_capabilities.supports_reverse = true;
+	terminal_capabilities.supports_underline = true;
+	terminal_capabilities.has_colors = has_colors ();
+
+	if (terminal_capabilities.has_colors) {
+		start_color ();
+		terminal_capabilities.color_count = COLORS;
+		terminal_capabilities.color_pair_count = COLOR_PAIRS;
+		terminal_capabilities.supports_default_colors = use_default_colors () == 0;
+	}
 
 	define_key ("\x1b[1;5A", Key.F(60));
 	define_key ("\x1b[1;5B", Key.F(61));
