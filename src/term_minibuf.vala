@@ -18,10 +18,17 @@
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 namespace TermMinibuf {
-	public void write (string s) {
+	static void fill_minibuffer_line (string face_name) {
 		term_move (term_height () - 1, 0);
-		term_clrtoeol ();
-		term_apply_face (Minibuf.showing_error () ? FACE_ERROR : FACE_DEFAULT);
+		term_apply_face (face_name);
+		term_addstr ("%*s".printf ((int) term_width (), ""));
+		term_move (term_height () - 1, 0);
+	}
+
+	public void write (string s) {
+		string base_face = Minibuf.showing_error () ? FACE_ERROR : FACE_DEFAULT;
+		fill_minibuffer_line (base_face);
+		term_apply_face (base_face);
 		term_addstr (s);
 		term_apply_face (FACE_DEFAULT);
 	}
@@ -47,8 +54,7 @@ namespace TermMinibuf {
 
 	void draw_read (string prompt, string val,
 					size_t prompt_len, string match, size_t pointo) {
-		term_move (term_height () - 1, 0);
-		term_clrtoeol ();
+		fill_minibuffer_line (FACE_DEFAULT);
 		term_apply_face (FACE_MINIBUFFER_PROMPT);
 		term_addstr (prompt);
 		term_apply_face (FACE_DEFAULT);

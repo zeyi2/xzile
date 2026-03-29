@@ -335,7 +335,7 @@ public void funcs_init () {
 									 cur_wp.bp == bp ? '.' : ' ',
 									 bp.readonly ? '%' : ' ',
 									 bp.modified ? '*' : ' ',
-									 bp.name, bp.length, "Fundamental");
+									 bp.name, bp.length, bp.mode_name ());
 							if (bp.filename != null)
 								bprintf ("%s", compact_path (bp.filename));
 							insert_newline ();

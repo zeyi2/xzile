@@ -463,6 +463,10 @@ public class Buffer {
 		return filename ?? name;
 	}
 
+	public string mode_name () {
+		return highlighter != null ? highlighter.name : "Fundamental";
+	}
+
 	/*
 	 * Set a new filename, and from it a name, for the buffer.
 	 */

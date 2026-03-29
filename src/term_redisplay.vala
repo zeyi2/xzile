@@ -272,11 +272,12 @@ static void draw_status_line (size_t line, size_t leftcol, Window wp) {
 
 	term_move (line, leftcol);
 	size_t n = wp.bp.offset_to_line (wp.o ());
-	string a = "--%s%2s  %-15s   %s %-9s (Fundamental".printf (
+	string a = "--%s%2s  %-15s   %s %-9s (%s".printf (
 		eol_type, make_mode_line_flags (wp), wp.bp.name,
 		make_screen_pos (wp), "(%zu,%zu)".printf (
 			n + 1, wp.bp.calculate_goalc (wp.o ())
-			)
+			),
+		wp.bp.mode_name ()
 		);
 
 	if (wp.bp.autofill)
