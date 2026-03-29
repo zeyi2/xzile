@@ -695,6 +695,27 @@ static bool apply_face_attribute (FaceSpec face,
 	}
 }
 
+static bool apply_face_attributes_from_args (FaceSpec face,
+											 Gee.Queue<string>? args,
+											 out string? error_message) {
+	error_message = null;
+	if (args == null)
+		return true;
+
+	while (!args.is_empty) {
+		string? attr_name = args.poll ();
+		string? attr_value = args.poll ();
+		if (attr_name == null || attr_value == null) {
+			error_message = "Face attribute `%s' requires a value".printf (attr_name ?? "(null)");
+			return false;
+		}
+		if (!apply_face_attribute (face, attr_name, attr_value, out error_message))
+			return false;
+	}
+
+	return true;
+}
+
 static void refresh_theme_display () {
 	if (cur_wp == null)
 		return;
@@ -759,18 +780,10 @@ Interactively, prompt for one of the registered theme names."""
 
 			try {
 				FaceSpec face = copy_theme_face_for_edit (theme, face_name);
-				while (!args.is_empty) {
-					string? attr_name = args.poll ();
-					string? attr_value = args.poll ();
-					if (attr_name == null || attr_value == null) {
-						Minibuf.error ("Face attribute `%s' requires a value", attr_name ?? "(null)");
-						return false;
-					}
-					string? error_message = null;
-					if (!apply_face_attribute (face, attr_name, attr_value, out error_message)) {
-						Minibuf.error ("%s", error_message);
-						return false;
-					}
+				string? error_message = null;
+				if (!apply_face_attributes_from_args (face, args, out error_message)) {
+					Minibuf.error ("%s", error_message);
+					return false;
 				}
 
 				theme.set_face (face);
@@ -786,6 +799,57 @@ Interactively, prompt for one of the registered theme names."""
 		"""Set attribute overrides for FACE in the current theme.
 
 Arguments are FACE followed by :ATTRIBUTE VALUE pairs such as
+:fg, :bg, :bold, :underline, :reverse, and :inherit."""
+		);
+
+	new LispFunc (
+		"theme-set-face",
+		(uniarg, args) => {
+			if (args == null || args.is_empty) {
+				Minibuf.error ("theme-set-face requires a theme name");
+				return false;
+			}
+
+			string? theme_name = args.poll ();
+			if (theme_name == null) {
+				Minibuf.error ("theme-set-face requires a theme name");
+				return false;
+			}
+
+			Theme? theme = lookup_theme (theme_name);
+			if (theme == null) {
+				Minibuf.error ("Undefined theme `%s'", theme_name);
+				return false;
+			}
+
+			string? face_name = args.poll ();
+			if (face_name == null) {
+				Minibuf.error ("theme-set-face requires a face name");
+				return false;
+			}
+
+			try {
+				FaceSpec face = copy_theme_face_for_edit (theme, face_name);
+				string? error_message = null;
+				if (!apply_face_attributes_from_args (face, args, out error_message)) {
+					Minibuf.error ("%s", error_message);
+					return false;
+				}
+
+				theme.set_face (face);
+			} catch (ThemeError e) {
+				Minibuf.error ("%s", e.message);
+				return false;
+			}
+
+			if (theme == get_current_theme ())
+				refresh_theme_display ();
+			return true;
+		},
+		false,
+		"""Set attribute overrides for FACE in THEME.
+
+Arguments are THEME, FACE, and then :ATTRIBUTE VALUE pairs such as
 :fg, :bg, :bold, :underline, :reverse, and :inherit."""
 		);
 }
