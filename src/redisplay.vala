@@ -37,6 +37,8 @@ public void resize_windows () {
 		}
 	}
 	funcall ("recenter");
+	/* Repaint minibuffer content after terminal resize. */
+	Minibuf.refresh ();
 }
 
 public void recenter (Window wp) {
