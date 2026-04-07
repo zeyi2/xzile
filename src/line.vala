@@ -161,6 +161,34 @@ size_t previous_line_indent () {
 	return cur_indent;
 }
 
+bool delete_trailing_whitespace () {
+	if (cur_bp.warn_if_readonly ())
+		return false;
+
+	Marker m = Marker.point ();
+
+	for (size_t line_start = 0; line_start != size_t.MAX; line_start = cur_bp.next_line (line_start)) {
+		size_t line_end = cur_bp.end_of_line (line_start);
+		size_t trim_start = line_end;
+
+		while (trim_start > line_start) {
+			char c = cur_bp.get_char (trim_start - 1);
+			if (c != ' ' && c != '\t')
+				break;
+			trim_start--;
+		}
+
+		if (trim_start < line_end) {
+			cur_bp.goto_offset (trim_start);
+			cur_bp.replace_estr (line_end - trim_start, ImmutableEstr.empty);
+		}
+	}
+
+	cur_bp.goto_offset (m.o);
+	m.unchain ();
+	return true;
+}
+
 
 public void line_init () {
 	new LispFunc (
@@ -251,6 +279,15 @@ the current buffer."""
 		},
 		true,
 		"""Delete all spaces and tabs around point."""
+		);
+
+	new LispFunc (
+		"delete-trailing-whitespace",
+		(uniarg, args) => {
+			return delete_trailing_whitespace ();
+		},
+		true,
+		"""Delete trailing spaces and tabs from each line in the current buffer."""
 		);
 
 	new LispFunc (
