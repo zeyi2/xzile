@@ -528,6 +528,13 @@ public class Buffer {
 		return highlighter != null ? highlighter.name : "Fundamental";
 	}
 
+	public CommentStyle? get_comment_style () {
+		if (highlighter is CommentableMode)
+			return ((CommentableMode) highlighter).comment_style;
+
+		return null;
+	}
+
 	/*
 	 * Set a new filename, and from it a name, for the buffer.
 	 */
@@ -536,11 +543,7 @@ public class Buffer {
 		if (filename[0] != '/')
 			filename = Path.build_filename (Environment.get_current_dir (), filename);
 
-		string basename = Path.get_basename (filename);
-		if (basename.has_suffix (".c") || basename.has_suffix (".h"))
-			highlighter = new CHighlighter ();
-		else
-			highlighter = null;
+		FiletypeMap.apply_to_buffer (this);
 
 		string new_name = Path.get_basename (filename);
 		/* Note: there can't be more than size_t.MAX buffers. */

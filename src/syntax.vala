@@ -15,3 +15,7 @@ public interface SyntaxHighlighter : Object {
 								   int start_state,
 								   string?[] face_names);
 }
+
+public interface CommentableMode : Object {
+	public abstract CommentStyle? comment_style { get; }
+}

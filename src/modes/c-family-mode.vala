@@ -1,16 +1,36 @@
-/* C syntax highlighter */
+/* Shared C-family mode implementation */
 
-public class CHighlighter : Object, SyntaxHighlighter {
-	private const string[] keywords = {
-		"auto", "break", "case", "char", "const", "continue", "default", "do",
-		"double", "else", "enum", "extern", "float", "for", "goto", "if",
-		"inline", "int", "long", "register", "restrict", "return", "short",
-		"signed", "sizeof", "static", "struct", "switch", "typedef", "union",
-		"unsigned", "void", "volatile", "while"
-	};
+public class CFamilyMode : Object, SyntaxHighlighter, CommentableMode {
+	private const int STATE_LINE_COMMENT = 1;
+	private const int STATE_BLOCK_COMMENT = 2;
+	private const int STATE_BLOCK_COMMENT_END = 20;
+	private const int STATE_STRING = 3;
+	private const int STATE_CHAR = 4;
+	private const int STATE_PREPROCESSOR = 5;
+
+	private string display_name;
+	private string[] keywords;
+	private CommentStyle family_comment_style;
+	private SyntaxCommentDefinition comments;
+
+	protected CFamilyMode (string display_name, string[] keywords) {
+		this.display_name = display_name;
+		this.keywords = keywords;
+		family_comment_style = new CommentStyle ("//", "/*", "*/", true);
+		comments = new SyntaxCommentDefinition (
+			family_comment_style,
+			STATE_LINE_COMMENT,
+			STATE_BLOCK_COMMENT,
+			STATE_BLOCK_COMMENT_END
+		);
+	}
 
 	public string name {
-		get { return "C"; }
+		get { return display_name; }
+	}
+
+	public CommentStyle? comment_style {
+		get { return family_comment_style; }
 	}
 
 	private bool is_ident_start (char c) {
@@ -74,20 +94,15 @@ public class CHighlighter : Object, SyntaxHighlighter {
 				} else if (kw_remain > 0) {
 					face_name = FACE_FONT_LOCK_KEYWORD;
 					kw_remain--;
-				} else if (c == '/' && next_c == '/') {
-					state = 1;
-					face_name = FACE_FONT_LOCK_COMMENT;
-				} else if (c == '/' && next_c == '*') {
-					state = 2;
-					face_name = FACE_FONT_LOCK_COMMENT;
+				} else if (comments.scan (ref state, c, next_c, out face_name)) {
 				} else if (c == '"') {
-					state = 3;
+					state = STATE_STRING;
 					face_name = FACE_FONT_LOCK_STRING;
 				} else if (c == '\'') {
-					state = 4;
+					state = STATE_CHAR;
 					face_name = FACE_FONT_LOCK_STRING;
 				} else if (c == '#' && is_first_non_space) {
-					state = 5;
+					state = STATE_PREPROCESSOR;
 					face_name = FACE_FONT_LOCK_PREPROCESSOR;
 				} else if (is_ident_start (c)) {
 					size_t kw_len = 0;
@@ -96,16 +111,8 @@ public class CHighlighter : Object, SyntaxHighlighter {
 						face_name = FACE_FONT_LOCK_KEYWORD;
 					}
 				}
-			} else if (state == 1) {
-				face_name = FACE_FONT_LOCK_COMMENT;
-			} else if (state == 2) {
-				face_name = FACE_FONT_LOCK_COMMENT;
-				if (c == '*' && next_c == '/')
-					state = 20;
-			} else if (state == 20) {
-				face_name = FACE_FONT_LOCK_COMMENT;
-				state = 0;
-			} else if (state == 3) {
+			} else if (comments.scan (ref state, c, next_c, out face_name)) {
+			} else if (state == STATE_STRING) {
 				face_name = FACE_FONT_LOCK_STRING;
 				if (c == '\\')
 					skip_count = 1;
@@ -113,7 +120,7 @@ public class CHighlighter : Object, SyntaxHighlighter {
 					state = 0;
 				else if (skip_count > 0)
 					skip_count--;
-			} else if (state == 4) {
+			} else if (state == STATE_CHAR) {
 				face_name = FACE_FONT_LOCK_STRING;
 				if (c == '\\')
 					skip_count = 1;
@@ -121,24 +128,22 @@ public class CHighlighter : Object, SyntaxHighlighter {
 					state = 0;
 				else if (skip_count > 0)
 					skip_count--;
-			} else if (state == 5) {
+			} else if (state == STATE_PREPROCESSOR) {
 				face_name = FACE_FONT_LOCK_PREPROCESSOR;
-				if (c == '/' && next_c == '/') {
-					state = 1;
-					face_name = FACE_FONT_LOCK_COMMENT;
-				} else if (c == '/' && next_c == '*') {
-					state = 2;
-					face_name = FACE_FONT_LOCK_COMMENT;
-				}
+				string? comment_face_name = null;
+				if (comments.scan (ref state, c, next_c, out comment_face_name))
+					face_name = comment_face_name;
 			}
 
 			if (i < face_names.length)
 				face_names[(int) i] = face_name;
-			if (!c.isspace () && state != 2 && state != 20)
+			if (!c.isspace () && state != STATE_BLOCK_COMMENT && state != STATE_BLOCK_COMMENT_END)
 				is_first_non_space = false;
 		}
 
-		if (state == 1 || state == 5 || state == 20 || state == 3 || state == 4)
+		state = comments.finish_line (state);
+
+		if (state == STATE_PREPROCESSOR || state == STATE_STRING || state == STATE_CHAR)
 			return 0;
 
 		return state;

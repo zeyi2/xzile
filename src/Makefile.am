@@ -50,7 +50,6 @@ src_xzile_SOURCE_FILES =				\
 	src/basic.vala					\
 	src/bind.vala					\
 	src/buffer.vala					\
-	src/c_highlighter.vala			\
 	src/utf8.vala					\
 	src/completion.vala				\
 	src/eval.vala					\
@@ -73,6 +72,13 @@ src_xzile_SOURCE_FILES =				\
 	src/registers.vala				\
 	src/search.vala					\
 	src/shell.vala					\
+	src/modes/comment-style.vala		\
+	src/modes/comment-definition.vala	\
+	src/modes/c-family-mode.vala		\
+	src/modes/c-mode.vala			\
+	src/modes/cpp-mode.vala			\
+	src/modes/python-mode.vala		\
+	src/modes/filetype-map.vala		\
 	src/syntax.vala				\
 	src/tbl_opts.vala				\
 	src/tbl_vars.vala				\
