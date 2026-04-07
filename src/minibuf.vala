@@ -34,7 +34,7 @@ namespace Minibuf {
 	}
 
 	public bool no_error ()	{
-		return contents == null;
+		return !error_displayed;
 	}
 
 	public bool showing_error () {
