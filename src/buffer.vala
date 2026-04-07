@@ -868,7 +868,21 @@ public class Buffer {
 		bool gotword = false;
 		do {
 			for (; !(dir > 0 ? eolp () : bolp ()); move_char (dir)) {
-				if (iswordchar (get_char (pt - ((dir < 0) ? 1 : 0))))
+				size_t char_o = pt;
+				if (dir < 0) {
+					size_t p = pt - 1;
+					size_t limit = line_o ();
+					while (p > limit && ((uchar) get_char (p) & 0xC0) == 0x80)
+						p--;
+
+					size_t prev_char_len;
+					get_utf8_char (p, out prev_char_len);
+					char_o = (p + prev_char_len == pt) ? p : pt - 1;
+				}
+
+				size_t char_len;
+				uint32 ch = get_utf8_char (char_o, out char_len);
+				if (iswordcodepoint (ch))
 					gotword = true;
 				else if (gotword)
 					break;

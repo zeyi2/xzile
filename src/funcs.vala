@@ -72,6 +72,10 @@ bool iswordchar (char c) {
 	return c.isalnum () || c == '$';
 }
 
+bool iswordcodepoint (uint32 c) {
+	return ((unichar) c).isalnum () || c == '$';
+}
+
 /***********************************************************************
                Move through balanced expressions (sexps)
 ***********************************************************************/
