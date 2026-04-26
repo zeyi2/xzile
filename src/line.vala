@@ -221,6 +221,52 @@ the current buffer."""
 		);
 
 	new LispFunc (
+		"duplicate-line",
+		(uniarg, args) => {
+			long n = 1;
+			if (!noarg (args) && !int_or_uniarg (args, ref n, uniarg))
+				return false;
+			if (n < 1) {
+				Minibuf.error ("Argument must be positive");
+				return false;
+			}
+			if (cur_bp.warn_if_readonly ())
+				return false;
+
+			size_t line_start = cur_bp.line_o ();
+			size_t old_col = cur_bp.pt - line_start;
+			size_t line_end = cur_bp.end_of_line (cur_bp.pt);
+			size_t insert_at = cur_bp.next_line (cur_bp.pt);
+			bool has_newline = insert_at != size_t.MAX;
+
+			ImmutableEstr line_text = cur_bp.get_region (new Region (line_start, line_end));
+			Estr chunk = Estr.of_empty (cur_bp.eol);
+			if (has_newline)
+				chunk.cat (cur_bp.get_region (new Region (line_start, insert_at)));
+			else {
+				chunk.cat (ImmutableEstr.of (cur_bp.eol, cur_bp.eol.length, cur_bp.eol));
+				chunk.cat (line_text);
+				insert_at = cur_bp.length;
+			}
+
+			cur_bp.goto_offset (insert_at);
+			for (long i = 0; i < n; i++)
+				cur_bp.insert_estr (chunk);
+
+			size_t duplicate_start = insert_at + (size_t) (n - 1) * chunk.length;
+			if (!has_newline)
+				duplicate_start += cur_bp.eol.length;
+			cur_bp.goto_offset (duplicate_start + old_col);
+			cur_bp.mark_active = false;
+			return true;
+		},
+		true,
+		"""Duplicate the current line below point.
+With prefix argument N, duplicate the line N times and leave point on the
+last duplicate at the same column."""
+		);
+
+	new LispFunc (
 		"insert",
 		(uniarg, args) => {
 			string? arg = args.poll ();

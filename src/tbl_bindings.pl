@@ -43,6 +43,7 @@
   "describe-variable" => ["\\C-hv", "\\F1v"],
   "downcase-region" => ["\\C-x\\C-l"],
   "downcase-word" => ["\\M-l"],
+  "duplicate-line" => ["\\C-x,"],
   "end-kbd-macro" => ["\\C-x)"],
   "end-of-buffer" => ["\\M->"],
   "end-of-line" => ["\\END", "\\C-e"],

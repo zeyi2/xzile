@@ -1,0 +1,6 @@
+(goto-line 2)
+(duplicate-line)
+(goto-line 4)
+(duplicate-line 2)
+(save-buffer)
+(save-buffers-kill-emacs)

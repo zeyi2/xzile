@@ -48,6 +48,7 @@ LISP_TESTS =						\
 	%D%/describe-variable.el			\
 	%D%/downcase-region.el				\
 	%D%/downcase-word.el				\
+	%D%/duplicate-line.el				\
 	%D%/end-of-buffer.el				\
 	%D%/end-of-line.el				\
 	%D%/exchange-point-and-mark.el			\
