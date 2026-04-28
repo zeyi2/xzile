@@ -66,6 +66,7 @@ public void zile_exit (int reason) {
 			abort ();
 	}
 
+	debug_shutdown ();
 	exit (reason);
 }
 
@@ -97,6 +98,7 @@ public int main (string[] args)
 	GLib.Log.set_always_fatal (LEVEL_CRITICAL);
 	program_name = Path.get_basename (args[0]);
 	init_cmdline ();
+	debug_init_from_env ();
 
 	var longopts = new GetoptOption[opts.length];
 	for (uint i = 0, nextopt = 0; i < opts.length; i++) {
@@ -175,8 +177,8 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 
 		if (c == -1)
 			break;
-		else if (c == 1)	/* Non-option (assume file name) */
-			longindex = 5;
+			else if (c == 1)	/* Non-option (assume file name) */
+				longindex = 7;
 		else if (c == '?')	/* Unknown option */
 			Minibuf.error ("Unknown option `%s'", args[this_optind]);
 		else if (c == ':') {/* Missing argument */
@@ -198,14 +200,20 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 			arg_arg.append (optarg);
 			arg_line.append (0);
 			break;
-        case 2: {
-            arg_type.append (ArgType.loadfile);
-            string a = expand_path (optarg);
-            arg_arg.append (a);
-            arg_line.append (0);
-            break;
-		}
-        case 3:
+	        case 2: {
+	            arg_type.append (ArgType.loadfile);
+	            string a = expand_path (optarg);
+	            arg_arg.append (a);
+	            arg_line.append (0);
+	            break;
+			}
+	        case 3:
+			debug_set_log_path (optarg);
+			break;
+	        case 4:
+			debug_set_categories (optarg);
+			break;
+	        case 5:
 			printf ("Usage: %s [OPTION-OR-FILENAME]...\n" +
 					"\n" +
 					"Run " + PACKAGE_NAME + ", the lightweight Emacs clone.\n" +
@@ -232,7 +240,7 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 					"Report bugs to " + PACKAGE_BUGREPORT + ".\n");
 			exit (EXIT_SUCCESS);
 			break;
-		case 4:
+			case 6:
 			print (ZILE_VERSION_STRING + "\n" +
 				   ZILE_COPYRIGHT_STRING + "\n" +
 				   PACKAGE_NAME + " comes with ABSOLUTELY NO WARRANTY.\n" +
@@ -241,7 +249,7 @@ PACKAGE_NAME + " is Free Software--Free as in Freedom--so you can redistribute c
 				   "For more information about these matters, see the file named COPYING.\n");
 			exit (EXIT_SUCCESS);
 			break;
-		case 5:
+		case 7:
 			if (optarg[0] == '+')
 				long.try_parse (optarg.substring (1), out line, null, 10);
 			else {

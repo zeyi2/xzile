@@ -73,6 +73,8 @@ public void init_cmdline () {
 		new Opt ("no-init-file", 'q', GetoptArgument.OPTIONAL, "", "do not load ~/." + PACKAGE),
 		new Opt ("funcall", 'f', GetoptArgument.REQUIRED, "FUNC", "call " + PACKAGE_NAME + " Lisp function FUNC with no arguments"),
 		new Opt ("load", 'l', GetoptArgument.REQUIRED, "FILE", "load " + PACKAGE_NAME + " Lisp FILE using the load function"),
+		new Opt ("debug-log", '\0', GetoptArgument.REQUIRED, "FILE", "append debug logs to FILE"),
+		new Opt ("debug-categories", '\0', GetoptArgument.REQUIRED, "CATS", "comma-separated debug categories, e.g. syntax,filetype"),
 		new Opt ("help", '\0', GetoptArgument.OPTIONAL, "", "display this help message and exit"),
 		new Opt ("version", '\0', GetoptArgument.OPTIONAL, "", "display version information and exit"),
 		new Doc (""),

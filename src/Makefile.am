@@ -52,6 +52,7 @@ src_xzile_SOURCE_FILES =				\
 	src/buffer.vala					\
 	src/utf8.vala					\
 	src/completion.vala				\
+	src/debug.vala					\
 	src/eval.vala					\
 	src/file.vala					\
 	src/funcs.vala					\
