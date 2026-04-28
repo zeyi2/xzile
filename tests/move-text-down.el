@@ -1,0 +1,6 @@
+(goto-line 2)
+(set-mark)
+(goto-line 3)
+(move-text-down)
+(save-buffer)
+(save-buffers-kill-emacs)

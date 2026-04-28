@@ -189,6 +189,125 @@ bool delete_trailing_whitespace () {
 	return true;
 }
 
+size_t line_end_with_eol (size_t line_start) {
+	size_t next = cur_bp.next_line (line_start);
+	return next != size_t.MAX ? next : cur_bp.length;
+}
+
+void goto_line_goalc (size_t line_start, size_t goal) {
+	cur_bp.goto_offset (line_start);
+	cur_bp.goalc = goal;
+	cur_bp.goto_goalc ();
+	cur_bp.goalc = goal;
+}
+
+bool move_current_line_up_once (size_t goal, out size_t new_start) {
+	size_t current_start = cur_bp.line_o ();
+	new_start = current_start;
+	if (current_start == 0) {
+		Minibuf.error ("Beginning of buffer");
+		return false;
+	}
+
+	size_t current_end = cur_bp.end_of_line (current_start);
+	size_t current_end_eol = line_end_with_eol (current_start);
+	size_t previous_start = cur_bp.prev_line (current_start);
+	size_t replace_start = previous_start;
+	size_t replace_end = current_end_eol;
+
+	Estr replacement = Estr.of_empty (cur_bp.eol);
+	if (current_end_eol == cur_bp.length) {
+		replacement.cat (cur_bp.get_region (new Region (current_start, current_end)));
+		replacement.cat (ImmutableEstr.of (cur_bp.eol, cur_bp.eol.length, cur_bp.eol));
+		replacement.cat (cur_bp.get_region (new Region (previous_start, current_start - cur_bp.eol.length)));
+	} else {
+		replacement.cat (cur_bp.get_region (new Region (current_start, current_end_eol)));
+		replacement.cat (cur_bp.get_region (new Region (previous_start, current_start)));
+	}
+
+	cur_bp.goto_offset (replace_start);
+	cur_bp.replace_estr (replace_end - replace_start, replacement);
+	new_start = previous_start;
+	goto_line_goalc (new_start, goal);
+	return true;
+}
+
+bool move_current_line_down_once (size_t goal, out size_t new_start) {
+	size_t current_start = cur_bp.line_o ();
+	size_t current_next = cur_bp.next_line (current_start);
+	new_start = current_start;
+	if (current_next == size_t.MAX) {
+		Minibuf.error ("End of buffer");
+		return false;
+	}
+
+	size_t current_end = cur_bp.end_of_line (current_start);
+	size_t next_end = cur_bp.end_of_line (current_next);
+	size_t next_next = cur_bp.next_line (current_next);
+	size_t replace_start = current_start;
+	size_t replace_end = next_next != size_t.MAX ? next_next : next_end;
+
+	Estr replacement = Estr.of_empty (cur_bp.eol);
+	if (next_next == size_t.MAX) {
+		replacement.cat (cur_bp.get_region (new Region (current_next, next_end)));
+		replacement.cat (ImmutableEstr.of (cur_bp.eol, cur_bp.eol.length, cur_bp.eol));
+		replacement.cat (cur_bp.get_region (new Region (current_start, current_end)));
+		new_start = current_start + (next_end - current_next) + cur_bp.eol.length;
+	} else {
+		replacement.cat (cur_bp.get_region (new Region (current_next, next_next)));
+		replacement.cat (cur_bp.get_region (new Region (current_start, current_next)));
+		new_start = current_start + (next_next - current_next);
+	}
+
+	cur_bp.goto_offset (replace_start);
+	cur_bp.replace_estr (replace_end - replace_start, replacement);
+	goto_line_goalc (new_start, goal);
+	return true;
+}
+
+bool move_active_region_lines (long line_delta) {
+	Region r = Region.calculate ();
+	if (r.size () == 0)
+		return true;
+
+	ImmutableEstr text = cur_bp.get_region (r);
+	cur_bp.goto_offset (r.start);
+	cur_bp.replace_estr (r.size (), ImmutableEstr.empty);
+	cur_bp.move_line (line_delta);
+	size_t new_start = cur_bp.pt;
+	cur_bp.insert_estr (text);
+	if (cur_bp.mark == null)
+		cur_bp.mark = Marker.point ();
+	cur_bp.mark.move (cur_bp, new_start);
+	cur_bp.mark_active = true;
+	return true;
+}
+
+bool move_text_by_lines (long line_delta) {
+	if (cur_bp.warn_if_readonly ())
+		return false;
+
+	if (line_delta == 0)
+		return true;
+
+	if (cur_bp.mark_active && cur_bp.mark != null && Region.calculate ().size () > 0)
+		return move_active_region_lines (line_delta);
+
+	size_t goal = cur_bp.calculate_goalc (cur_bp.pt);
+	long steps = line_delta > 0 ? line_delta : -line_delta;
+	for (long i = 0; i < steps; i++) {
+		size_t new_start = cur_bp.line_o ();
+		bool ok = line_delta < 0
+			? move_current_line_up_once (goal, out new_start)
+			: move_current_line_down_once (goal, out new_start);
+		if (!ok)
+			return i > 0;
+	}
+
+	cur_bp.mark_active = false;
+	return true;
+}
+
 
 public void line_init () {
 	new LispFunc (
@@ -218,6 +337,30 @@ the current buffer."""
 		},
 		true,
 		"""Insert a newline and leave point before it."""
+		);
+
+	new LispFunc (
+		"move-text-up",
+		(uniarg, args) => {
+			long n = 1;
+			if (!noarg (args) && !int_or_uniarg (args, ref n, uniarg))
+				return false;
+			return move_text_by_lines (-n);
+		},
+		true,
+		"""Move the current line, or the active region, up by N lines."""
+		);
+
+	new LispFunc (
+		"move-text-down",
+		(uniarg, args) => {
+			long n = 1;
+			if (!noarg (args) && !int_or_uniarg (args, ref n, uniarg))
+				return false;
+			return move_text_by_lines (n);
+		},
+		true,
+		"""Move the current line, or the active region, down by N lines."""
 		);
 
 	new LispFunc (

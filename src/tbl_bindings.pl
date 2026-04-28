@@ -79,6 +79,8 @@
   "mark-sexp" => ["\\C-\\M-@"],
   "mark-whole-buffer" => ["\\C-xh"],
   "mark-word" => ["\\M-@"],
+  "move-text-down" => ["\\M-\\DOWN"],
+  "move-text-up" => ["\\M-\\UP"],
   "newline" => ["\\RET"],
   "newline-and-indent" => ["\\C-j"],
   "next-buffer" => ["\\C-x\\RIGHT"],

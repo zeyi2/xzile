@@ -190,6 +190,8 @@ public void term_init () {
 
 	define_key ("\x1b[1;5A", Key.F(60));
 	define_key ("\x1b[1;5B", Key.F(61));
+	define_key ("\x1b[1;3A", Key.F(62));
+	define_key ("\x1b[1;3B", Key.F(63));
 
 	key_buf = new ArrayList<Keystroke> ();
 	pending_paste_text = null;
@@ -297,6 +299,10 @@ static Keystroke codetokey (uint c) {
 			return KBD_UP | KBD_CTRL;
 		else if (c == Key.F (61))
 			return KBD_DOWN | KBD_CTRL;
+		else if (c == Key.F (62))
+			return KBD_UP | KBD_META;
+		else if (c == Key.F (63))
+			return KBD_DOWN | KBD_META;
 		return c;
     }
 }

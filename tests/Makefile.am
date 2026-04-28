@@ -78,6 +78,8 @@ LISP_TESTS =						\
 	%D%/mark-sexp.el				\
 	%D%/mark-whole-buffer.el			\
 	%D%/mark-word.el				\
+	%D%/move-text-down.el				\
+	%D%/move-text-up.el				\
 	%D%/newline-and-indent.el			\
 	%D%/newline.el					\
 	%D%/next-line.el				\
