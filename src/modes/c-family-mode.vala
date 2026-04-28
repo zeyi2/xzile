@@ -9,13 +9,18 @@ public class CFamilyMode : Object, SyntaxHighlighter, CommentableMode {
 	private const int STATE_PREPROCESSOR = 5;
 
 	private string display_name;
-	private string[] keywords;
+	private HashTable<string, string> keyword_table;
 	private CommentStyle family_comment_style;
 	private SyntaxCommentDefinition comments;
 
 	protected CFamilyMode (string display_name, string[] keywords) {
 		this.display_name = display_name;
-		this.keywords = keywords;
+		keyword_table = new HashTable<string, string> (str_hash, str_equal);
+		size_t keyword_count = 0;
+		foreach (string kw in keywords) {
+			keyword_table.insert (kw, kw);
+			keyword_count++;
+		}
 		family_comment_style = new CommentStyle ("//", "/*", "*/", true);
 		comments = new SyntaxCommentDefinition (
 			family_comment_style,
@@ -23,6 +28,12 @@ public class CFamilyMode : Object, SyntaxHighlighter, CommentableMode {
 			STATE_BLOCK_COMMENT,
 			STATE_BLOCK_COMMENT_END
 		);
+		debug_log ("syntax", "%s init keyword_count=%zu has_int=%s has_if=%s has_return=%s",
+			display_name,
+			keyword_count,
+			keyword_table.lookup ("int") != null ? "yes" : "no",
+			keyword_table.lookup ("if") != null ? "yes" : "no",
+			keyword_table.lookup ("return") != null ? "yes" : "no");
 	}
 
 	public string name {
@@ -45,30 +56,31 @@ public class CFamilyMode : Object, SyntaxHighlighter, CommentableMode {
 		kw_len = 0;
 		if (i > 0 && is_ident_part (bp.get_char (o + i - 1)))
 			return false;
+		if (!is_ident_start (bp.get_char (o + i)))
+			return false;
 
-		foreach (string kw in keywords) {
-			size_t len = kw.length;
-			if (i + len > line_len)
-				continue;
-
-			bool match = true;
-			for (size_t k = 0; k < len; k++) {
-				if (bp.get_char (o + i + k) != kw[(long) k]) {
-					match = false;
-					break;
-				}
-			}
-
-			if (!match)
-				continue;
-			if (i + len < line_len && is_ident_part (bp.get_char (o + i + len)))
-				continue;
-
-			kw_len = len;
-			return true;
+		string token = "";
+		size_t len = 0;
+		while (i + len < line_len) {
+			char c = bp.get_char (o + i + len);
+			if (!is_ident_part (c))
+				break;
+			token += c.to_string ();
+			len++;
 		}
 
-		return false;
+		if (len == 0)
+			return false;
+		string? keyword = keyword_table.lookup (token);
+		if (debug_enabled ("syntax"))
+			debug_log ("syntax", "%s candidate token=%s len=%zu offset=%zu keyword=%s",
+				display_name, token, len, o + i, keyword != null ? "yes" : "no");
+		if (keyword == null)
+			return false;
+
+		kw_len = len;
+		debug_log ("syntax", "%s keyword token=%s offset=%zu", display_name, token, o + i);
+		return true;
 	}
 
 	public int scan_line (Buffer bp,
@@ -139,6 +151,19 @@ public class CFamilyMode : Object, SyntaxHighlighter, CommentableMode {
 				face_names[(int) i] = face_name;
 			if (!c.isspace () && state != STATE_BLOCK_COMMENT && state != STATE_BLOCK_COMMENT_END)
 				is_first_non_space = false;
+		}
+
+		if (len > 0 && debug_enabled ("syntax")) {
+			size_t keyword_bytes = 0;
+			size_t preprocessor_bytes = 0;
+			for (size_t i = 0; i < len && i < face_names.length; i++) {
+				if (face_names[(int) i] == FACE_FONT_LOCK_KEYWORD)
+					keyword_bytes++;
+				else if (face_names[(int) i] == FACE_FONT_LOCK_PREPROCESSOR)
+					preprocessor_bytes++;
+			}
+			debug_log ("syntax", "%s line=%zu state_in=%d state_mid=%d len=%zu keyword_bytes=%zu preprocessor_bytes=%zu",
+				display_name, line_idx, start_state, state, len, keyword_bytes, preprocessor_bytes);
 		}
 
 		state = comments.finish_line (state);

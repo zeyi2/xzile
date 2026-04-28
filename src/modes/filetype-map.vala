@@ -33,6 +33,8 @@ public class FiletypeMap : Object {
 
 	public static SyntaxHighlighter? resolve_highlighter (string? filename) {
 		string? mode_id = resolve_mode_id (filename);
+		debug_log ("filetype", "resolve_highlighter filename=%s mode=%s",
+			filename ?? "(null)", mode_id ?? "(null)");
 
 		if (mode_id == "c")
 			return new CMode ();
@@ -46,5 +48,7 @@ public class FiletypeMap : Object {
 
 	public static void apply_to_buffer (Buffer bp) {
 		bp.highlighter = resolve_highlighter (bp.filename);
+		debug_log ("filetype", "apply_to_buffer buffer=%s filename=%s highlighter=%s",
+			bp.name, bp.filename ?? "(null)", bp.highlighter != null ? bp.highlighter.name : "(null)");
 	}
 }
