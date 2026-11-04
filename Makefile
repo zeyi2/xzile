@@ -56,6 +56,7 @@ OBJS = \
 	src/buffer.o \
 	src/completion.o \
 	src/debug.o \
+	src/dired.o \
 	src/estr.o \
 	src/eval.o \
 	src/file.o \

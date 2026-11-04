@@ -26,8 +26,6 @@
  * Key binding.
  *--------------------------------------------------------------------------*/
 
-typedef struct Binding Binding;
-
 typedef struct {
 	Keystroke key;
 	Binding *binding;
@@ -144,6 +142,33 @@ binding_bind (Binding *b, const Keystroke *keys, size_t n, LispFunc *func)
 	binding_bind (branch, keys + 1, n - 1, func);
 }
 
+enum Lookup { LOOKUP_UNDEFINED, LOOKUP_FUNCTION, LOOKUP_PREFIX };
+
+/* Look up a key sequence in the current buffer's keymap, then in the
+   global one; a local prefix shadows a global binding. */
+static enum Lookup
+lookup_in (Binding *map, const KeyVec *keys, LispFunc **f)
+{
+	Binding *p = map != NULL ? binding_find (map, keys->v, keys->n) : NULL;
+	if (p == NULL)
+		return LOOKUP_UNDEFINED;
+	if (p->func != NULL) {
+		*f = p->func;
+		return LOOKUP_FUNCTION;
+	}
+	return p->has_map && p->n > 0 ? LOOKUP_PREFIX : LOOKUP_UNDEFINED;
+}
+
+static enum Lookup
+lookup_keys (const KeyVec *keys, LispFunc **f)
+{
+	*f = NULL;
+	enum Lookup local = lookup_in (cur_bp != NULL ? cur_bp->keymap : NULL, keys, f);
+	if (local != LOOKUP_UNDEFINED)
+		return local;
+	return lookup_in (root_bindings, keys, f);
+}
+
 Keystroke
 binding_completion (const char *a)
 {
@@ -193,10 +218,8 @@ get_key_sequence (KeyVec *keys)
 		key = getkey (GETKEY_DEFAULT);
 	while (key == KBD_NOKEY);
 	kv_push (keys, key);
-	for (;;) {
-		Binding *p = binding_find (root_bindings, keys->v, keys->n);
-		if (p == NULL || p->func != NULL || !p->has_map)
-			break;
+	LispFunc *f;
+	while (lookup_keys (keys, &f) == LOOKUP_PREFIX) {
 		char *desc = keyvectodesc (keys);
 		kv_push (keys, binding_completion (desc));
 		free (desc);
@@ -215,8 +238,26 @@ get_function_by_keys (const KeyVec *keys)
 	}
 
 	/* See if we've got a valid key sequence */
-	Binding *p = binding_find (root_bindings, keys->v, keys->n);
-	return p != NULL ? p->func : NULL;
+	LispFunc *f;
+	return lookup_keys (keys, &f) == LOOKUP_FUNCTION ? f : NULL;
+}
+
+Binding *
+keymap_new (void)
+{
+	return binding_new ();
+}
+
+void
+keymap_bind (Binding *map, const char *keystr, const char *func_name)
+{
+	KeyVec keys;
+	LispFunc *f = lisp_func_find (func_name);
+	assert (f != NULL);
+	if (keystrtovec (keystr, &keys)) {
+		binding_bind (map, keys.v, keys.n, f);
+		kv_free (&keys);
+	}
 }
 
 static bool
@@ -366,6 +407,8 @@ static const struct {
 	{ "\\M-\\\\", "delete-horizontal-space" },
 	{ "\\C-x1", "delete-other-windows" },
 	{ "\\C-x0", "delete-window" },
+	{ "\\C-xd", "dired" },
+	{ "\\C-x\\C-j", "dired-jump" },
 	{ "\\C-hb", "describe-bindings" },
 	{ "\\F1b", "describe-bindings" },
 	{ "\\C-hf", "describe-function" },

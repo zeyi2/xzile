@@ -350,6 +350,7 @@ main (int argc, char **argv)
 	basic_init ();
 	buffer_init_lisp ();
 	bind_init ();
+	dired_init ();
 	eval_init ();
 	file_init ();
 	funcs_init ();
@@ -427,7 +428,7 @@ main (int argc, char **argv)
 			break;
 		case ARG_FILE:
 			ok = find_file (arg);
-			if (ok)
+			if (ok && cur_bp->dired == NULL)
 				funcall_n ("goto-line", cmd_args[i].line);
 			break;
 		}

@@ -148,6 +148,8 @@ find_file (const char *filename)
 			break;
 
 	if (bp == NULL) {
+		if (file_is_dir (filename))
+			return dired (filename);
 		if (file_exists (filename) && !file_is_regular (filename)) {
 			minibuf_error ("File exists but could not be read");
 			return false;
@@ -275,9 +277,9 @@ create_backup_filename (const char *filename, const char *backupdir)
 	return ret;
 }
 
-/* Copy `from' to `to', preserving permissions and times. */
-static bool
-copy_file (const char *from, const char *to)
+/* Copy the file `from' to `to', preserving permissions and times. */
+bool
+file_copy (const char *from, const char *to)
 {
 	int in = open (from, O_RDONLY);
 	if (in < 0)
@@ -353,7 +355,7 @@ backup_and_write (Buffer *bp, const char *filename)
 		const char *backupdir = get_variable_bool ("backup-directory") ?
 			get_variable ("backup-directory") : NULL;
 		char *bfilename = create_backup_filename (filename, backupdir);
-		if (copy_file (filename, bfilename))
+		if (file_copy (filename, bfilename))
 			bp->backup = true;
 		else {
 			minibuf_error ("Cannot make backup file: %s", strerror (errno));

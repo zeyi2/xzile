@@ -407,6 +407,8 @@ NORETURN void zile_exit (int reason);
 
 typedef struct Buffer Buffer;
 typedef struct Window Window;
+typedef struct Binding Binding;
+typedef struct Dired Dired;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
 
@@ -453,6 +455,9 @@ struct Buffer {
 	bool isearch;		/* The buffer is in Isearch loop. */
 	bool mark_active;	/* The mark is active. */
 	char *dir;		/* The default directory. */
+
+	Binding *keymap;	/* Buffer-local key bindings, or NULL. */
+	Dired *dired;		/* Directory editor state, or NULL. */
 
 	const Mode *highlighter;
 	int *syntax_states;	/* Parser state at the start of each line. */
@@ -513,6 +518,7 @@ const CommentStyle *buffer_get_comment_style (const Buffer *bp);
 void buffer_set_names (Buffer *bp, const char *filename);
 const char *buffer_get_variable (Buffer *bp, const char *name);
 Buffer *buffer_find (const char *name);
+char *buffer_unique_name (const char *base);
 bool buffer_is_live (const Buffer *bp);
 void buffer_switch_to (Buffer *bp, bool reorder);
 bool buffer_warn_if_readonly (Buffer *bp);
@@ -701,6 +707,8 @@ char *term_minibuf_read (const char *prompt, const char *val, long pos, Completi
  *--------------------------------------------------------------------------*/
 
 void init_default_bindings (void);
+Binding *keymap_new (void);
+void keymap_bind (Binding *map, const char *keystr, const char *func_name);
 void get_key_sequence (KeyVec *keys);
 LispFunc *get_function_by_keys (const KeyVec *keys);
 Keystroke binding_completion (const char *a);
@@ -770,7 +778,13 @@ char *expand_path (const char *path);
 char *compact_path (const char *path);
 bool find_file (const char *filename);
 int write_to_disk (Buffer *bp, const char *filename, mode_t mode);
+bool file_copy (const char *from, const char *to);
 void file_init (void);
+
+/* dired.c */
+bool dired (const char *dir);
+void dired_free (Buffer *bp);
+void dired_init (void);
 
 void search_init (void);
 void shell_init (void);

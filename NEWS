@@ -2,12 +2,28 @@ GNU Zile NEWS                                         -*- outline -*-
 
 * Noteworthy changes in release ?.? (????-??-??) [?]
 
+** New features
+
+  Dired, a directory editor as in Emacs. Open it with C-x d (dired),
+  C-x C-j (dired-jump), or by visiting a directory. In a Dired buffer:
+
+    n p SPC     move between files        RET f e   visit file or directory
+    o           visit in other window     v         visit read-only
+    ^           parent directory          g         reread the directory
+    m u DEL     mark, unmark              U t       unmark all, toggle marks
+    % m         mark by regexp            d % d ~   flag for deletion
+    x           delete flagged files      D         delete marked files
+    R           rename or move            C         copy (recursively)
+    M           chmod (octal or u+x)      + create directory
+    k           hide lines                w         copy file names
+    s           sort by name or date      q         bury the buffer
+
+  Buffers can have their own key bindings, which take precedence over
+  the global ones.
+
 ** Miscellaneous
 
-  XZile has been rewritten in C. The only dependency is the C library:
-  terminal handling uses termios and ANSI escape sequences instead of
-  curses, regular expressions use a built-in Emacs-syntax engine, and
-  the build is a plain Makefile.
+  XZile has been rewritten in C.
 
 ** Bug fixes
 

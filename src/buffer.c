@@ -624,14 +624,24 @@ buffer_set_names (Buffer *bp, const char *new_filename)
 	filetype_apply_to_buffer (bp);
 
 	char *base = path_basename (filename);
+	free (bp->name);
+	bp->name = NULL;
+	bp->name = buffer_unique_name (base);
+	free (base);
+}
+
+/*
+ * Return `base', or `base<N>' if that names a buffer already.
+ */
+char *
+buffer_unique_name (const char *base)
+{
 	char *name = xstrdup (base);
 	for (size_t i = 2; buffer_find (name) != NULL; i++) {
 		free (name);
 		name = xasprintf ("%s<%zu>", base, i);
 	}
-	free (base);
-	free (bp->name);
-	bp->name = name;
+	return name;
 }
 
 const char *
@@ -788,6 +798,7 @@ buffer_free (Buffer *bp)
 		m->next = NULL;
 	}
 	free (own_mark);
+	dired_free (bp);
 	undo_free_all (bp);
 	if (bp->vars != NULL)
 		map_free (bp->vars, NULL);
