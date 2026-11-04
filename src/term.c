@@ -1099,3 +1099,34 @@ term_take_pending_paste (void)
 	pending_paste_text = NULL;
 	return text;
 }
+
+void
+term_suspend (void)
+{
+	raise (SIGTSTP);
+}
+
+/* A terminal reaches the clipboard through clipboard programs or OSC 52
+   (see clipboard.c), and has no mouse. */
+bool
+term_clipboard_set (const char *text, size_t len)
+{
+	(void) text;
+	(void) len;
+	return false;
+}
+
+char *
+term_clipboard_get (size_t *len)
+{
+	(void) len;
+	return NULL;
+}
+
+bool
+term_mouse_position (size_t *y, size_t *x)
+{
+	(void) y;
+	(void) x;
+	return false;
+}

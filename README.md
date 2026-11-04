@@ -34,6 +34,45 @@ The installed binary is **xzile**, and the user init file is **~/.xzile**
 
 ---
 
+## Graphical version
+
+`xzile-gui` is the same editor in its own window, for Linux and macOS:
+anti-aliased fonts, truecolor themes, a modern status bar, mouse
+support and the system clipboard. It is also plain C, and needs SDL2
+(2.0.18 or later) and SDL2_ttf:
+
+```bash
+# Debian/Ubuntu: sudo apt install libsdl2-dev libsdl2-ttf-dev
+# Fedora:        sudo dnf install SDL2-devel SDL2_ttf-devel
+# macOS:         brew install sdl2 sdl2_ttf pkg-config
+make gui            # builds src/xzile-gui
+make install-gui    # installs xzile-gui and, on Linux, a desktop entry
+make app            # macOS: builds XZile.app, to drag to Applications
+```
+
+What the window adds to the terminal editor:
+
+- Themes `xzile-dark` (the default) and `xzile-light`; switch with
+  `M-x load-theme`. The `cursor` face sets the cursor colour.
+- Click to move point and select a window, drag to select, and scroll
+  the window under the pointer with the wheel.
+- Kills and yanks use the system clipboard; middle-click pastes.
+- Command (macOS) or Super shortcuts: ⌘C copy, ⌘X cut, ⌘V paste,
+  ⌘Z undo, ⌘S save, ⌘O open, ⌘F search, ⌘A select all, ⌘W close
+  window, ⌘Q quit, and ⌘= ⌘- ⌘0 (or Ctrl and the wheel) to zoom.
+- Option/Alt is Meta, as in a terminal.
+
+The font is the best monospace font installed (JetBrains Mono, Fira
+Code, SF Mono, Menlo, DejaVu Sans Mono, ...). Choose another in
+`~/.xzile`:
+
+```lisp
+(setq gui-font "Fira Code")   ; a family, or a font file
+(setq gui-font-size 15)
+```
+
+---
+
 ## Reporting bugs
 
 For **XZile-specific** bugs and feature requests, please open an issue or pull request at the project repository (or send an email to zeyi2@nekoarch.cc if you wish). If the issue is with upstream GNU Zile, use the [GNU Zile tracker](https://savannah.gnu.org/projects/zile/) or <bug-zile@gnu.org> as described in **README**.

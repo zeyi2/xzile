@@ -34,7 +34,7 @@ static bool
 enabled (void)
 {
 	return get_variable_bool ("select-enable-clipboard") && term_initialized () &&
-		isatty (STDIN_FILENO) && isatty (STDOUT_FILENO);
+		(term_get_capabilities ()->gui || (isatty (STDIN_FILENO) && isatty (STDOUT_FILENO)));
 }
 
 static bool
@@ -148,6 +148,8 @@ clipboard_flush (void)
 	if (last_text != NULL && last_len == es.len && memcmp (last_text, es.text, es.len) == 0)
 		return;
 	remember (es.text, es.len);
+	if (term_clipboard_set (es.text, es.len))
+		return;
 	const char *const *argv = local_command (false);
 	if (argv == NULL || process_run (argv, NULL, es.text, es.len, NULL, NULL) != 0)
 		send_osc52 (es.text, es.len);
@@ -159,17 +161,28 @@ char *
 clipboard_fetch (size_t *len)
 {
 	clipboard_flush ();
-	const char *const *argv = enabled () ? local_command (true) : NULL;
-	if (argv == NULL)
+	if (!enabled ())
 		return NULL;
-	StrBuf out;
-	sb_init (&out);
-	if (process_run (argv, NULL, NULL, 0, &out, NULL) != 0 || out.len == 0 ||
-	    (last_text != NULL && last_len == out.len && memcmp (last_text, out.s, out.len) == 0)) {
-		free (out.s);
+	size_t n;
+	char *text = term_clipboard_get (&n);
+	if (text == NULL) {
+		const char *const *argv = local_command (true);
+		if (argv == NULL)
+			return NULL;
+		StrBuf out;
+		sb_init (&out);
+		if (process_run (argv, NULL, NULL, 0, &out, NULL) != 0) {
+			free (out.s);
+			return NULL;
+		}
+		text = out.s;
+		n = out.len;
+	}
+	if (n == 0 || (last_text != NULL && last_len == n && memcmp (last_text, text, n) == 0)) {
+		free (text);
 		return NULL;
 	}
-	remember (out.s, out.len);
-	*len = out.len;
-	return out.s;
+	remember (text, n);
+	*len = n;
+	return text;
 }

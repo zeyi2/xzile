@@ -52,7 +52,7 @@ ZILE_CPPFLAGS = -DPACKAGE=\"$(PACKAGE)\" -DPACKAGE_NAME=\"$(PACKAGE_NAME)\" \
 
 ALL_CFLAGS = $(ZILE_CPPFLAGS) $(CPPFLAGS) $(WARN_CFLAGS) $(PTHREAD_FLAGS) $(CFLAGS)
 
-OBJS = \
+CORE_OBJS = \
 	src/basic.o \
 	src/bind.o \
 	src/buffer.o \
@@ -89,7 +89,6 @@ OBJS = \
 	src/selectors.o \
 	src/shell.o \
 	src/syntax.o \
-	src/term.o \
 	src/term_minibuf.o \
 	src/term_redisplay.o \
 	src/terminal.o \
@@ -102,6 +101,15 @@ OBJS = \
 	src/window.o \
 	src/winhist.o
 
+OBJS = $(CORE_OBJS) src/term.o
+
+# The graphical frontend, xzile-gui, replaces the terminal (term.o) with
+# a window drawn using SDL2 and SDL2_ttf, found with pkg-config.
+GUI_OBJS = $(CORE_OBJS) src/gui.o
+PKG_CONFIG = pkg-config
+GUI_CFLAGS = `$(PKG_CONFIG) --cflags sdl2 SDL2_ttf`
+GUI_LIBS = `$(PKG_CONFIG) --libs sdl2 SDL2_ttf` -lm
+
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o
 
 DOCS = AUTHORS FAQ NEWS README.md src/dotzile.sample
@@ -111,8 +119,17 @@ all: src/xzile src/dotzile.sample
 src/xzile: $(OBJS)
 	$(CC) $(PTHREAD_FLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
 
-$(OBJS) src/estr-test.o: src/xzile.h
-src/screen.o src/term.o: src/screen.h
+$(OBJS) src/gui.o src/estr-test.o: src/xzile.h
+src/screen.o src/term.o src/gui.o: src/screen.h
+
+gui: src/xzile-gui
+
+src/xzile-gui: $(GUI_OBJS)
+	$(CC) $(PTHREAD_FLAGS) $(LDFLAGS) -o $@ $(GUI_OBJS) $(GUI_LIBS) $(LIBS)
+
+src/gui.o: src/gui.c
+	$(CC) $(ALL_CFLAGS) $(GUI_CFLAGS) -c -o $@ src/gui.c
+
 src/variables.o src/mkdotzile: src/tbl_vars.h
 
 .SUFFIXES: .c .o
@@ -138,11 +155,26 @@ install: all
 	$(INSTALL) -m 644 $(DOCS) $(DESTDIR)$(docdir)
 	$(INSTALL) -m 644 doc/xzile.1 $(DESTDIR)$(man1dir)/$(PACKAGE).1
 
+install-gui: gui
+	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(datarootdir)/applications
+	$(INSTALL) -m 755 src/xzile-gui $(DESTDIR)$(bindir)/$(PACKAGE)-gui
+	$(INSTALL) -m 644 xzile.desktop $(DESTDIR)$(datarootdir)/applications/$(PACKAGE).desktop
+
+# A macOS application bundle for xzile-gui, using the SDL2 libraries
+# it was built against.
+app: gui
+	rm -rf XZile.app
+	mkdir -p XZile.app/Contents/MacOS
+	cp src/xzile-gui XZile.app/Contents/MacOS/$(PACKAGE)-gui
+	sed 's/@VERSION@/$(VERSION)/g' Info.plist.in > XZile.app/Contents/Info.plist
+
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(PACKAGE) $(DESTDIR)$(man1dir)/$(PACKAGE).1
+	rm -f $(DESTDIR)$(bindir)/$(PACKAGE)-gui $(DESTDIR)$(datarootdir)/applications/$(PACKAGE).desktop
 	rm -rf $(DESTDIR)$(docdir)
 
 clean:
-	rm -f src/*.o src/xzile src/estr-test src/mkdotzile src/dotzile.sample
+	rm -f src/*.o src/xzile src/xzile-gui src/estr-test src/mkdotzile src/dotzile.sample
+	rm -rf XZile.app
 
-.PHONY: all check install uninstall clean
+.PHONY: all gui check install install-gui app uninstall clean

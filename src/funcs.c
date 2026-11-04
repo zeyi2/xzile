@@ -20,7 +20,6 @@
 #include "xzile.h"
 
 #include <ctype.h>
-#include <signal.h>
 #include <wctype.h>
 
 void
@@ -618,7 +617,7 @@ F_suspend_emacs (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	raise (SIGTSTP);
+	term_suspend ();
 	return true;
 }
 

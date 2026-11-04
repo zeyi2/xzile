@@ -335,9 +335,164 @@ F_other_window (long uniarg, Args *args)
 	return true;
 }
 
+/*
+ * Mouse commands, for frontends that have a mouse.
+ */
+
+typedef struct {
+	size_t y, x;
+	WinNode *leaf;
+} LeafAt;
+
+static void
+find_leaf_at (WinNode *leaf, void *data)
+{
+	LeafAt *d = data;
+	if (d->y >= leaf->y && d->y < leaf->y + leaf->height &&
+	    d->x >= leaf->x && d->x < leaf->x + leaf->width)
+		d->leaf = leaf;
+}
+
+/* The window at the last mouse event, or NULL if there is none (as in
+   the minibuffer); `y' and `x' are set relative to the window. */
+static WinNode *
+mouse_leaf (size_t *y, size_t *x)
+{
+	LeafAt d = { 0, 0, NULL };
+	if (!term_mouse_position (&d.y, &d.x))
+		return NULL;
+	winnode_each_leaf (root_node, find_leaf_at, &d);
+	if (d.leaf != NULL) {
+		*y = d.y - d.leaf->y;
+		*x = d.x - d.leaf->x;
+	}
+	return d.leaf;
+}
+
+/* Move point to the text shown at row `y', column `x' of the current
+   window. */
+static void
+move_point_to_cell (size_t y, size_t x)
+{
+	if (shell_char_mode (cur_bp))
+		return;
+	y = MIN (y, cur_wp->eheight > 0 ? cur_wp->eheight - 1 : 0);
+	buffer_move_line (cur_bp, (long) y - (long) cur_wp->topdelta);
+	size_t gutter = cur_wp->gutter_width;
+	cur_bp->goalc = (x > gutter ? x - gutter : 0) + cur_wp->start_column;
+	buffer_goto_goalc (cur_bp);
+}
+
+static bool
+F_mouse_set_point (long uniarg, Args *args)
+{
+	(void) uniarg;
+	(void) args;
+	size_t y, x;
+	WinNode *leaf = mouse_leaf (&y, &x);
+	if (leaf == NULL)
+		return false;
+	if (leaf->wp != cur_wp)
+		window_set_current (leaf->wp);
+	cur_bp->mark_active = false;
+	if (y < cur_wp->eheight)
+		move_point_to_cell (y, x);
+	return true;
+}
+
+static bool
+F_mouse_drag_region (long uniarg, Args *args)
+{
+	(void) uniarg;
+	(void) args;
+	size_t y, x;
+	if (!term_mouse_position (&y, &x))
+		return false;
+	/* The drag stays in the window where it started. */
+	WinNode *leaf = find_leaf_for (cur_wp);
+	y = y > leaf->y ? y - leaf->y : 0;
+	x = x > leaf->x ? x - leaf->x : 0;
+	if (!cur_bp->mark_active) {
+		set_mark ();
+		cur_bp->mark_active = true;
+	}
+	move_point_to_cell (y, x);
+	return true;
+}
+
+/* Scroll the window under the mouse by `n' lines, forward if positive,
+   moving point only to keep it on the screen. */
+static bool
+mwheel_scroll (long n)
+{
+	size_t y, x;
+	WinNode *leaf = mouse_leaf (&y, &x);
+	Window *old = cur_wp;
+	if (leaf != NULL && leaf->wp != cur_wp)
+		window_set_current (leaf->wp);
+
+	Window *wp = cur_wp;
+	if (!shell_char_mode (cur_bp)) {
+		size_t line = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
+		size_t top = line - MIN (wp->topdelta, line);
+		if (n > 0) {
+			size_t last = buffer_offset_to_line (cur_bp, buffer_length (cur_bp));
+			size_t k = MIN ((size_t) n, last - top);
+			if (wp->topdelta >= k)
+				wp->topdelta -= k;
+			else {
+				buffer_move_line (cur_bp, (long) (k - wp->topdelta));
+				wp->topdelta = 0;
+			}
+		} else {
+			wp->topdelta += MIN ((size_t) -n, top);
+			if (wp->eheight > 0 && wp->topdelta >= wp->eheight) {
+				buffer_move_line (cur_bp, -(long) (wp->topdelta - (wp->eheight - 1)));
+				wp->topdelta = wp->eheight - 1;
+			}
+		}
+		wp->lastpointn = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
+	}
+
+	if (old != cur_wp)
+		window_set_current (old);
+	return true;
+}
+
+#define MWHEEL_LINES 3
+
+static bool
+F_mwheel_scroll_up (long uniarg, Args *args)
+{
+	(void) uniarg;
+	(void) args;
+	return mwheel_scroll (MWHEEL_LINES);
+}
+
+static bool
+F_mwheel_scroll_down (long uniarg, Args *args)
+{
+	(void) uniarg;
+	(void) args;
+	return mwheel_scroll (-MWHEEL_LINES);
+}
+
 void
 window_init (void)
 {
+	lisp_func_new ("mouse-set-point", F_mouse_set_point, true,
+		       "Move point to the position clicked on with the mouse,\n"
+		       "selecting the window clicked in.");
+
+	lisp_func_new ("mouse-drag-region", F_mouse_drag_region, true,
+		       "Set the region to the text the mouse is dragged over.");
+
+	lisp_func_new ("mwheel-scroll-up", F_mwheel_scroll_up, true,
+		       "Scroll the window under the mouse forward a few lines.");
+
+	lisp_func_new ("mwheel-scroll-down", F_mwheel_scroll_down, true,
+		       "Scroll the window under the mouse backward a few lines.");
+
 	lisp_func_new ("split-window", F_split_window, true,
 		       "Split current window into two windows, one above the other.\n"
 		       "Both windows display the same buffer now current.");

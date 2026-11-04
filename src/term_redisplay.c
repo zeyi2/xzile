@@ -308,9 +308,84 @@ update_gutter_width (WinNode *leaf, void *data)
 	wp->gutter_width = digits + 2;
 }
 
+/* The status line in a graphical window: a bar with the buffer on the
+   left and the position on the right, as in modern editors. */
+static void
+draw_gui_status_line (size_t line, size_t leftcol, Window *wp)
+{
+	const char *face = wp == cur_wp ? FACE_MODE_LINE : FACE_MODE_LINE_INACTIVE;
+	TerminalStyle style;
+	if (!resolve_terminal_style (face, &style))
+		return;
+
+	term_apply_style (&style);
+	term_move (line, leftcol);
+	add_spaces (wp->ewidth);
+
+	const char *eol = buffer_eol (wp->bp);
+	char *pos = make_screen_pos (wp);
+	StrBuf right;
+	sb_init (&right);
+	sb_addf (&right, "Ln %zu, Col %zu   %s   %s   %s  ",
+		 buffer_offset_to_line (wp->bp, window_o (wp)) + 1,
+		 buffer_calculate_goalc (wp->bp, window_o (wp)) + 1, pos,
+		 strcmp (eol, eol_crlf) == 0 ? "CRLF" : strcmp (eol, eol_cr) == 0 ? "CR" : "LF",
+		 buffer_mode_name (wp->bp));
+	free (pos);
+
+	StrBuf left;
+	sb_init (&left);
+	sb_add (&left, wp->bp->modified ? " \xe2\x97\x8f " : "   ");
+	size_t name_at = left.len;
+	sb_add (&left, wp->bp->name);
+	size_t name_end = left.len;
+	if (wp->bp->readonly)
+		sb_add (&left, "  [read-only]");
+	if (wp->bp->autofill)
+		sb_add (&left, "  Fill");
+	if (thisflag & FLAG_DEFINING_MACRO)
+		sb_add (&left, "  Def");
+	if (wp->bp->isearch)
+		sb_add (&left, "  Isearch");
+
+	term_move (line, leftcol);
+	add_clipped (left.s, wp->ewidth);
+
+	/* The buffer name stands out in bold. */
+	size_t name_col = 3;
+	if (name_col < wp->ewidth) {
+		TerminalStyle bold = style;
+		bold.bold = true;
+		term_apply_style (&bold);
+		term_move (line, leftcol + name_col);
+		left.s[name_end] = '\0';
+		add_clipped (left.s + name_at, wp->ewidth - name_col);
+		term_apply_style (&style);
+	}
+
+	size_t left_w = 0;
+	for (size_t i = 0; i < left.len; i = utf8_next_char (left.s, left.len, i))
+		left_w++;
+	/* In a narrow window, the position alone. */
+	if (left_w + 2 + right.len > wp->ewidth)
+		right.len = (size_t) (strstr (right.s, "   ") - right.s) + 2;
+	if (left_w + 2 + right.len <= wp->ewidth) {
+		term_move (line, leftcol + wp->ewidth - right.len);
+		term_addnstr (right.s, right.len - 2);
+	}
+	sb_free (&left);
+	sb_free (&right);
+	term_attrset (FONT_NORMAL);
+}
+
 static void
 draw_status_line (size_t line, size_t leftcol, Window *wp)
 {
+	if (term_get_capabilities ()->gui) {
+		draw_gui_status_line (line, leftcol, wp);
+		return;
+	}
+
 	term_apply_face (wp == cur_wp ? FACE_MODE_LINE : FACE_MODE_LINE_INACTIVE);
 
 	term_move (line, leftcol);
@@ -435,7 +510,10 @@ draw_window (size_t topline, size_t leftcol, Window *wp)
 	if (wp->fwidth > wp->ewidth) {
 		size_t sep_col = leftcol + wp->ewidth;
 		bool right_has_linenum = right_neighbor_has_linenum (leftcol + wp->fwidth, topline, wp->fheight);
-		const char *sep_str = right_has_linenum ? " |" : "| ";
+		/* A graphical window draws the box character as a solid line. */
+		const char *bar = term_get_capabilities ()->gui ? "\xe2\x94\x82" : "|";
+		char sep_str[8];
+		snprintf (sep_str, sizeof sep_str, right_has_linenum ? " %s" : "%s ", bar);
 		for (size_t row = topline; row < topline + wp->fheight; ++row) {
 			term_move (row, sep_col);
 			term_apply_face (FACE_VERTICAL_BORDER);
