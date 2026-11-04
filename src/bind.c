@@ -391,6 +391,7 @@ get_and_run_command (void)
 
 	minibuf_clear ();
 	if (f != NULL) {
+		winhist_before_command ();
 		if (lastflag & FLAG_SET_UNIARG)
 			call_command (f, last_uniarg, NULL);
 		else {
@@ -398,6 +399,7 @@ get_and_run_command (void)
 			call_command (f, last_uniarg, args);
 			args_free (args);
 		}
+		winhist_after_command ();
 	} else {
 		char *desc = keyvectodesc (&keys);
 		minibuf_error ("%s is undefined", desc);

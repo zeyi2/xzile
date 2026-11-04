@@ -27,6 +27,8 @@ Window *cur_wp = NULL;
 /* The first window in list. */
 Window *head_wp = NULL;
 
+static unsigned long last_window_id;
+
 Window *
 window_find (const char *name)
 {
@@ -122,6 +124,7 @@ window_delete (Window *wp)
 		window_set_current (prev);
 
 	marker_free (wp->saved_pt);
+	winhist_free (wp);
 	free (wp);
 }
 
@@ -130,6 +133,8 @@ wm_split (Window *wp, enum SplitKind kind)
 {
 	/* Copy wp. */
 	Window *newwp = xzalloc (sizeof (Window));
+	newwp->id = ++last_window_id;
+	winhist_copy (newwp, wp);
 	newwp->next = wp->next;
 	newwp->bp = wp->bp;
 	newwp->topdelta = wp->topdelta;
@@ -184,6 +189,7 @@ create_scratch_window (void)
 {
 	Buffer *bp = create_scratch_buffer ();
 	Window *wp = xzalloc (sizeof (Window));
+	wp->id = ++last_window_id;
 	cur_wp = head_wp = wp;
 	wp->fwidth = wp->ewidth = term_width ();
 	/* Save space for minibuffer. */

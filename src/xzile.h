@@ -662,7 +662,7 @@ int buffer_get_line_start_state (Buffer *bp, size_t line_idx);
 Buffer *create_auto_buffer (const char *name);
 Buffer *create_scratch_buffer (void);
 struct Completion *buffer_make_completion (void);
-void buffer_init_lisp (void);
+void buffer_make_recent (Buffer *bp);
 
 /* Movement callbacks bound to `cur_bp'. */
 bool cur_move_char (long dir);
@@ -698,8 +698,23 @@ void undo_init (void);
  * Windows and layout (window.c, layout.c).
  *--------------------------------------------------------------------------*/
 
+/* A place a window has shown: point in a buffer, and how far down the
+   window that point was. */
+typedef struct {
+	Marker *pt;
+	size_t topdelta;
+} WinPlace;
+
+typedef struct {
+	WinPlace *v;		/* Oldest first. */
+	size_t n, cap;
+} WinPlaces;
+
 struct Window {
 	Window *next;		/* The next window in window list. */
+	unsigned long id;	/* Distinguishes windows reusing an address. */
+	WinPlaces back;		/* Buffers previously shown, for previous-buffer. */
+	WinPlaces fwd;		/* Buffers left by previous-buffer, for next-buffer. */
 	Buffer *bp;		/* The buffer displayed in window. */
 	size_t topdelta;	/* The top line delta from point. */
 	size_t start_column;	/* The start column of the window (>0 if scrolled
@@ -719,6 +734,14 @@ struct Window {
 extern Window *cur_wp, *head_wp;
 
 Window *window_find (const char *name);
+
+/* winhist.c */
+void winhist_before_command (void);
+void winhist_after_command (void);
+void winhist_copy (Window *to, const Window *from);
+void winhist_free (Window *wp);
+Buffer *winhist_replacement (Window *wp, const Buffer *dying, size_t *o, size_t *topdelta);
+void winhist_init (void);
 size_t window_o (const Window *wp);
 bool window_top_visible (Window *wp);
 bool window_bottom_visible (const Window *wp);
@@ -1000,6 +1023,7 @@ void compile_init (void);
 
 /* magit.c */
 void magit_free (Buffer *bp);
+bool magit_buffer_is_transient (const Buffer *bp);
 void magit_init (void);
 
 /* dired.c */

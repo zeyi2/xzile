@@ -46,6 +46,18 @@ GNU Zile NEWS                                         -*- outline -*-
   (and parsed in parallel), operations on thousands of files take one
   git command, and very large sections start collapsed.
 
+  C-x LEFT (previous-buffer) and C-x RIGHT (next-buffer) work like a
+  browser's back and forward, for each window separately: LEFT goes
+  back to the buffer the window showed before, at the place it was
+  left, and RIGHT forward again; showing another buffer forgets the way
+  forward. Once a window's history runs out, LEFT goes on to buffers it
+  has not shown, most recently used first. After either command, bare
+  LEFT and RIGHT keep moving, while the echo area shows the buffers on
+  either side; any other key ends this and is then handled as usual.
+  Internal buffers such as *Completions* and Magit's process buffer are
+  skipped. Killing a buffer now shows the buffer each window showed
+  before it, rather than the next one in the buffer list.
+
   When point is before an opening bracket or after a closing one, the
   bracket and its match are highlighted (show-paren-match face), or
   shown in the show-paren-mismatch face if they do not pair up or there

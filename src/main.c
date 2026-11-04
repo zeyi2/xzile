@@ -353,7 +353,6 @@ main (int argc, char **argv)
 	lisp_init ();
 	init_variables ();
 	basic_init ();
-	buffer_init_lisp ();
 	bind_init ();
 	dired_init ();
 	terminal_init ();
@@ -375,6 +374,7 @@ main (int argc, char **argv)
 	undo_init ();
 	variables_init ();
 	window_init ();
+	winhist_init ();
 
 	bool qflag = false;
 	parse_command_line (argc, argv, &qflag);

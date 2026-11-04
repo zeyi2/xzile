@@ -233,6 +233,13 @@ clear_lines (Magit *m)
 	m->nlines = 0;
 }
 
+bool
+magit_buffer_is_transient (const Buffer *bp)
+{
+	return bp->magit != NULL &&
+		(bp->magit->kind == MAGIT_PROCESS || bp->magit->kind == MAGIT_COMMIT_MESSAGE);
+}
+
 void
 magit_free (Buffer *bp)
 {

@@ -98,7 +98,8 @@ OBJS = \
 	src/util.o \
 	src/variables.o \
 	src/vterm.o \
-	src/window.o
+	src/window.o \
+	src/winhist.o
 
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o
 

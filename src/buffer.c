@@ -690,6 +690,13 @@ move_to_head (Buffer *bp)
 	}
 }
 
+/* Make `bp' the most recently used buffer. */
+void
+buffer_make_recent (Buffer *bp)
+{
+	move_to_head (bp);
+}
+
 /*
  * Switch to the specified buffer.
  *
@@ -830,18 +837,33 @@ buffer_kill (Buffer *bp)
 	else
 		next_bp = head_bp == bp ? NULL : head_bp;
 
-	/* Search for windows displaying the buffer to kill. */
+	/* Windows displaying the buffer to kill go back to the buffer
+	   they showed before it, or else to the next buffer. */
 	for (Window *wp = head_wp; wp != NULL; wp = wp->next)
 		if (wp->bp == bp) {
-			wp->bp = next_bp;
-			wp->topdelta = 0;
+			size_t o, topdelta;
+			Buffer *prev = winhist_replacement (wp, bp, &o, &topdelta);
 			marker_free (wp->saved_pt);
 			wp->saved_pt = NULL;
+			wp->bp = prev != NULL ? prev : next_bp;
+			wp->topdelta = 0;
+			if (prev != NULL) {
+				o = MIN (o, buffer_length (prev));
+				if (wp == cur_wp)
+					buffer_goto_offset (prev, o);
+				else {
+					wp->saved_pt = xzalloc (sizeof (Marker));
+					marker_move (wp->saved_pt, prev, o);
+				}
+				size_t line = buffer_offset_to_line (prev, o);
+				wp->topdelta = MIN (MIN (topdelta, line), wp->eheight > 0 ? wp->eheight - 1 : 0);
+				wp->lastpointn = line;
+			}
 		}
 
 	/* Remove the buffer from the buffer list. */
 	if (cur_bp == bp)
-		cur_bp = next_bp;
+		cur_bp = cur_wp->bp;
 	if (head_bp == bp)
 		head_bp = head_bp->next;
 	for (Buffer *it = head_bp; it != NULL && it->next != NULL; it = it->next)
@@ -1198,53 +1220,3 @@ buffer_make_completion (void)
 	return make_buffer_completion ();
 }
 
-static bool
-F_next_buffer (long uniarg, Args *args)
-{
-	(void) uniarg;
-	(void) args;
-	if (head_bp == NULL || head_bp->next == NULL)
-		return true;
-
-	Buffer *next_bp = cur_bp->next;
-	if (next_bp == NULL)
-		next_bp = head_bp;
-
-	buffer_switch_to (next_bp, false);
-	return true;
-}
-
-static bool
-F_previous_buffer (long uniarg, Args *args)
-{
-	(void) uniarg;
-	(void) args;
-	if (head_bp == NULL || head_bp->next == NULL)
-		return true;
-
-	Buffer *prev_bp = NULL;
-	if (cur_bp == head_bp) {
-		for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
-			prev_bp = bp;
-	} else {
-		for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
-			if (bp->next == cur_bp) {
-				prev_bp = bp;
-				break;
-			}
-	}
-
-	if (prev_bp != NULL)
-		buffer_switch_to (prev_bp, false);
-	return true;
-}
-
-void
-buffer_init_lisp (void)
-{
-	lisp_func_new ("next-buffer", F_next_buffer, true,
-		       "Switch to the next buffer in the buffer list.");
-
-	lisp_func_new ("previous-buffer", F_previous_buffer, true,
-		       "Switch to the previous buffer in the buffer list.");
-}
