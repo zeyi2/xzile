@@ -34,6 +34,18 @@ GNU Zile NEWS                                         -*- outline -*-
   buffer, RET visits the error at point, n and p move between errors,
   g recompiles, C-c C-k interrupts and q buries it.
 
+  Magit: C-x g (magit-status) shows the repository in sections, from
+  which TAB expands files and hunks, s, u and k stage, unstage and
+  discard the file, hunk, section or region at point, and RET visits
+  it. Popups give commit (c), push (P), pull (F), fetch (f), branch
+  (b), log (l), diff (d), merge (m), rebase (r), reset (X), tag (t)
+  and stash (z) commands; commit messages are edited in a buffer, with
+  C-c C-c to commit. 4 shows every diff, $ the git commands run, and ?
+  the commands. It is built for large repositories: a refresh runs its
+  git commands on parallel threads, diffs are fetched only when shown
+  (and parsed in parallel), operations on thousands of files take one
+  git command, and very large sections start collapsed.
+
   sit-for waits while processing subprocess output.
 
   Buffers can have their own key bindings, which take precedence over

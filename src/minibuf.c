@@ -222,6 +222,39 @@ minibuf_read_yesno (const char *fmt, ...)
 	return ret;
 }
 
+/* Returns 1 for y, 0 for n, and -1 if cancelled. */
+int
+minibuf_read_y_or_n (const char *fmt, ...)
+{
+	va_list ap;
+	va_start (ap, fmt);
+	char *prompt = xvasprintf (fmt, ap);
+	va_end (ap);
+
+	const char *errmsg = "";
+	int ans;
+	for (;;) {
+		minibuf_write ("%s%s(y or n) ", errmsg, prompt);
+		Keystroke key = getkey (GETKEY_DEFAULT);
+		if (key == 'y' || key == 'Y' || key == ' ') {
+			ans = 1;
+			break;
+		} else if (key == 'n' || key == 'N' || key == KBD_DEL || key == KBD_BS) {
+			ans = 0;
+			break;
+		} else if (key == KBD_CANCEL) {
+			ans = -1;
+			break;
+		}
+		errmsg = "Please answer y or n.  ";
+	}
+	free (prompt);
+	minibuf_clear ();
+	if (ans < 0)
+		funcall ("keyboard-quit");
+	return ans;
+}
+
 char *
 minibuf_read_completion (const char *fmt, const char *val, Completion *cp, History *hp, ...)
 {

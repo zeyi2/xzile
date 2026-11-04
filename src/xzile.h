@@ -410,6 +410,12 @@ struct pollfd;
 size_t process_poll_fds (struct pollfd *fds, size_t max);
 bool process_handle_events (const struct pollfd *fds, size_t n);
 bool process_reap (void);
+/* Run `argv' (found on PATH) and wait for it, feeding it `input' if not
+   NULL and collecting its standard output and error (either may be
+   NULL). `env' lists extra NAME=VALUE settings. Returns the exit status,
+   or -1 if it could not be run. Thread-safe. */
+int process_run (const char *const *argv, const char *const *env,
+		 const char *input, size_t input_len, StrBuf *out, StrBuf *err);
 
 /* Redisplay (term_redisplay.c). */
 void term_redisplay (void);
@@ -498,6 +504,7 @@ typedef struct Binding Binding;
 typedef struct Dired Dired;
 typedef struct Shell Shell;
 typedef struct Compilation Compilation;
+typedef struct Magit Magit;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
 
@@ -549,6 +556,7 @@ struct Buffer {
 	Dired *dired;		/* Directory editor state, or NULL. */
 	Shell *shell;		/* Terminal emulator state, or NULL. */
 	Compilation *compilation; /* Compilation state, or NULL. */
+	Magit *magit;		/* Git interface state, or NULL. */
 	char *mode_label;	/* Mode line name overriding the highlighter's. */
 
 	const Mode *highlighter;
@@ -786,6 +794,7 @@ char *minibuf_read (const char *fmt, const char *value, ...) PRINTF_LIKE (1, 3);
 long minibuf_read_number (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_filename (const char *fmt, const char *value, const char *file, ...) PRINTF_LIKE (1, 4);
 int minibuf_read_yesno (const char *fmt, ...) PRINTF_LIKE (1, 2);
+int minibuf_read_y_or_n (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_completion (const char *fmt, const char *val, Completion *cp, History *hp, ...) PRINTF_LIKE (1, 5);
 char *minibuf_vread_completion (const char *fmt, const char *val, Completion *cp, History *hp,
 				const char *empty_err, const char *invalid_err, va_list ap);
@@ -891,6 +900,10 @@ void compilation_free (Buffer *bp);
 bool compilation_process_alive (const Buffer *bp);
 void compile_init (void);
 
+/* magit.c */
+void magit_free (Buffer *bp);
+void magit_init (void);
+
 /* dired.c */
 bool dired (const char *dir);
 void dired_free (Buffer *bp);
@@ -952,6 +965,15 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_FONT_LOCK_BUILTIN "font-lock-builtin-face"
 #define FACE_FONT_LOCK_PREPROCESSOR "font-lock-preprocessor-face"
 #define FACE_FONT_LOCK_WARNING "font-lock-warning-face"
+#define FACE_MAGIT_SECTION_HEADING "magit-section-heading"
+#define FACE_MAGIT_DIFF_FILE_HEADING "magit-diff-file-heading"
+#define FACE_MAGIT_DIFF_HUNK_HEADING "magit-diff-hunk-heading"
+#define FACE_MAGIT_DIFF_ADDED "magit-diff-added"
+#define FACE_MAGIT_DIFF_REMOVED "magit-diff-removed"
+#define FACE_MAGIT_HASH "magit-hash"
+#define FACE_MAGIT_BRANCH_LOCAL "magit-branch-local"
+#define FACE_MAGIT_BRANCH_REMOTE "magit-branch-remote"
+#define FACE_MAGIT_LOG_DATE "magit-log-date"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */

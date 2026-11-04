@@ -85,6 +85,15 @@ static const char *const builtin_faces[] = {
 	FACE_FONT_LOCK_BUILTIN,
 	FACE_FONT_LOCK_PREPROCESSOR,
 	FACE_FONT_LOCK_WARNING,
+	FACE_MAGIT_SECTION_HEADING,
+	FACE_MAGIT_DIFF_FILE_HEADING,
+	FACE_MAGIT_DIFF_HUNK_HEADING,
+	FACE_MAGIT_DIFF_ADDED,
+	FACE_MAGIT_DIFF_REMOVED,
+	FACE_MAGIT_HASH,
+	FACE_MAGIT_BRANCH_LOCAL,
+	FACE_MAGIT_BRANCH_REMOTE,
+	FACE_MAGIT_LOG_DATE,
 };
 
 static bool
@@ -530,6 +539,15 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_FONT_LOCK_BUILTIN, "cyan", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_FONT_LOCK_PREPROCESSOR, "yellow", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_FONT_LOCK_WARNING, NULL, NULL, FACE_WARNING, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_SECTION_HEADING, "yellow", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_FILE_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_HUNK_HEADING, "white", "brightblack", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_ADDED, "green", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_REMOVED, "red", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_HASH, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "cyan", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "green", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "brightblack", NULL, NULL, U, U, U);
 }
 
 static void
@@ -562,6 +580,15 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_FONT_LOCK_BUILTIN, "blue", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_FONT_LOCK_PREPROCESSOR, "red", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_FONT_LOCK_WARNING, NULL, NULL, FACE_WARNING, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_SECTION_HEADING, "magenta", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_FILE_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_HUNK_HEADING, "black", "brightwhite", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_ADDED, "green", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_REMOVED, "red", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_HASH, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "blue", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "green", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "brightblack", NULL, NULL, U, U, U);
 }
 
 static void
@@ -594,6 +621,15 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_FONT_LOCK_BUILTIN, NULL, NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_FONT_LOCK_PREPROCESSOR, NULL, NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_FONT_LOCK_WARNING, NULL, NULL, FACE_WARNING, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_SECTION_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_FILE_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_HUNK_HEADING, NULL, NULL, NULL, U, U, T);
+	set_builtin_face (t, FACE_MAGIT_DIFF_ADDED, "green", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_REMOVED, "red", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_HASH, NULL, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, NULL, NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_MAGIT_LOG_DATE, NULL, NULL, NULL, U, U, U);
 }
 
 static char *

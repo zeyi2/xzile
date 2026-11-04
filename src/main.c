@@ -99,6 +99,8 @@ signal_init (void)
 	signal (SIGHUP, other_sig_handler);
 	signal (SIGINT, other_sig_handler);
 	signal (SIGTERM, other_sig_handler);
+	/* Writes to closed pipes fail with EPIPE instead. */
+	signal (SIGPIPE, SIG_IGN);
 }
 
 
@@ -354,6 +356,7 @@ main (int argc, char **argv)
 	dired_init ();
 	terminal_init ();
 	compile_init ();
+	magit_init ();
 	eval_init ();
 	file_init ();
 	funcs_init ();

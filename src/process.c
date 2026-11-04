@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <spawn.h>
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -50,6 +51,8 @@ struct Process {
 };
 
 static Process *processes;
+
+extern char **environ;
 
 static void
 set_nonblock_cloexec (int fd)
@@ -391,4 +394,180 @@ process_reap (void)
 		}
 	}
 	return any;
+}
+
+/* The environment for a new process: ours, with `env' (NAME=VALUE
+   strings) overriding or adding to it. */
+static char **
+make_environment (const char *const *env)
+{
+	size_t n = 0, extra = 0;
+	while (environ[n] != NULL)
+		n++;
+	while (env != NULL && env[extra] != NULL)
+		extra++;
+	char **envp = xmalloc ((n + extra + 1) * sizeof (char *));
+	size_t k = 0;
+	for (size_t i = 0; i < n; i++) {
+		bool overridden = false;
+		for (size_t j = 0; j < extra && !overridden; j++) {
+			size_t len = strcspn (env[j], "=");
+			overridden = strncmp (environ[i], env[j], len) == 0 && environ[i][len] == '=';
+		}
+		if (!overridden)
+			envp[k++] = environ[i];
+	}
+	for (size_t j = 0; j < extra; j++)
+		envp[k++] = (char *) env[j];
+	envp[k] = NULL;
+	return envp;
+}
+
+static void
+close_pair (int fds[2])
+{
+	for (int i = 0; i < 2; i++)
+		if (fds[i] >= 0) {
+			close (fds[i]);
+			fds[i] = -1;
+		}
+}
+
+static bool
+cloexec_pipe (int fds[2])
+{
+	if (pipe (fds) != 0) {
+		fds[0] = fds[1] = -1;
+		return false;
+	}
+	fcntl (fds[0], F_SETFD, FD_CLOEXEC);
+	fcntl (fds[1], F_SETFD, FD_CLOEXEC);
+	return true;
+}
+
+/* Thread-safe: may be called from several threads at once. */
+int
+process_run (const char *const *argv, const char *const *env,
+	     const char *input, size_t input_len, StrBuf *out, StrBuf *err)
+{
+	int in_pipe[2] = { -1, -1 }, out_pipe[2] = { -1, -1 }, err_pipe[2] = { -1, -1 };
+	if (!cloexec_pipe (out_pipe) || !cloexec_pipe (err_pipe) ||
+	    (input != NULL && !cloexec_pipe (in_pipe))) {
+		close_pair (out_pipe);
+		close_pair (err_pipe);
+		close_pair (in_pipe);
+		return -1;
+	}
+
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init (&fa);
+	if (input != NULL)
+		posix_spawn_file_actions_adddup2 (&fa, in_pipe[0], 0);
+	else
+		posix_spawn_file_actions_addopen (&fa, 0, "/dev/null", O_RDONLY, 0);
+	posix_spawn_file_actions_adddup2 (&fa, out_pipe[1], 1);
+	posix_spawn_file_actions_adddup2 (&fa, err_pipe[1], 2);
+
+	posix_spawnattr_t attr;
+	posix_spawnattr_init (&attr);
+	sigset_t mask, def;
+	sigemptyset (&mask);
+	sigemptyset (&def);
+	int sigs[] = { SIGPIPE, SIGINT, SIGQUIT, SIGTSTP, SIGCHLD, SIGWINCH, SIGHUP, SIGTERM };
+	for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++)
+		sigaddset (&def, sigs[i]);
+	posix_spawnattr_setsigmask (&attr, &mask);
+	posix_spawnattr_setsigdefault (&attr, &def);
+	short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+#ifdef POSIX_SPAWN_SETSID
+	/* Keep the child off our terminal, so it cannot prompt on it. */
+	flags |= POSIX_SPAWN_SETSID;
+#endif
+	posix_spawnattr_setflags (&attr, flags);
+
+	char **envp = make_environment (env);
+	pid_t pid;
+	int rc = posix_spawnp (&pid, argv[0], &fa, &attr, (char *const *) argv, envp);
+	free (envp);
+	posix_spawn_file_actions_destroy (&fa);
+	posix_spawnattr_destroy (&attr);
+
+	close (out_pipe[1]);
+	close (err_pipe[1]);
+	if (input != NULL)
+		close (in_pipe[0]);
+	if (rc != 0) {
+		close (out_pipe[0]);
+		close (err_pipe[0]);
+		if (input != NULL)
+			close (in_pipe[1]);
+		return -1;
+	}
+
+	int in_fd = -1;
+	if (input != NULL) {
+		in_fd = in_pipe[1];
+		fcntl (in_fd, F_SETFL, fcntl (in_fd, F_GETFL) | O_NONBLOCK);
+		if (input_len == 0) {
+			close (in_fd);
+			in_fd = -1;
+		}
+	}
+
+	int fds[2] = { out_pipe[0], err_pipe[0] };
+	StrBuf *bufs[2] = { out, err };
+	size_t written = 0;
+	char buf[65536];
+	while (fds[0] >= 0 || fds[1] >= 0) {
+		struct pollfd pfd[3];
+		nfds_t n = 0;
+		int which[3];
+		for (int i = 0; i < 2; i++)
+			if (fds[i] >= 0) {
+				pfd[n].fd = fds[i];
+				pfd[n].events = POLLIN;
+				which[n++] = i;
+			}
+		if (in_fd >= 0) {
+			pfd[n].fd = in_fd;
+			pfd[n].events = POLLOUT;
+			which[n++] = 2;
+		}
+		if (poll (pfd, n, -1) < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		for (nfds_t k = 0; k < n; k++) {
+			if (!(pfd[k].revents & (POLLIN | POLLOUT | POLLHUP | POLLERR)))
+				continue;
+			int i = which[k];
+			if (i == 2) {
+				ssize_t w = write (in_fd, input + written, input_len - written);
+				if (w > 0)
+					written += (size_t) w;
+				if ((w < 0 && errno != EAGAIN && errno != EINTR) || written == input_len) {
+					close (in_fd);
+					in_fd = -1;
+				}
+				continue;
+			}
+			ssize_t r = read (fds[i], buf, sizeof buf);
+			if (r > 0) {
+				if (bufs[i] != NULL)
+					sb_addn (bufs[i], buf, (size_t) r);
+			} else if (r == 0 || (errno != EINTR && errno != EAGAIN)) {
+				close (fds[i]);
+				fds[i] = -1;
+			}
+		}
+	}
+	if (in_fd >= 0)
+		close (in_fd);
+
+	int status;
+	while (waitpid (pid, &status, 0) < 0)
+		if (errno != EINTR)
+			return -1;
+	return WIFEXITED (status) ? WEXITSTATUS (status) : 128 + (WIFSIGNALED (status) ? WTERMSIG (status) : 0);
 }

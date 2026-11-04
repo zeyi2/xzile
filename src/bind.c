@@ -428,6 +428,8 @@ static const struct {
 	{ "\\C-x1", "delete-other-windows" },
 	{ "\\C-x0", "delete-window" },
 	{ "\\C-xd", "dired" },
+	{ "\\C-xg", "magit-status" },
+	{ "\\C-x\\M-g", "magit-dispatch" },
 	{ "\\C-x\\C-j", "dired-jump" },
 	{ "\\C-x`", "next-error" },
 	{ "\\M-gn", "next-error" },

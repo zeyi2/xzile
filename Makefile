@@ -37,6 +37,8 @@ DESTDIR =
 
 CC = cc
 CFLAGS = -O2 -g
+# POSIX threads, from the C library.
+PTHREAD_FLAGS = -pthread
 WARN_CFLAGS = -std=c99 -Wall -Wextra -Wno-unused-parameter
 CPPFLAGS =
 LDFLAGS =
@@ -48,7 +50,7 @@ ZILE_CPPFLAGS = -DPACKAGE=\"$(PACKAGE)\" -DPACKAGE_NAME=\"$(PACKAGE_NAME)\" \
 	-DVERSION=\"$(VERSION)\" -DPACKAGE_BUGREPORT=\"$(PACKAGE_BUGREPORT)\" \
 	-DPATH_DOCDIR=\"$(docdir)\"
 
-ALL_CFLAGS = $(ZILE_CPPFLAGS) $(CPPFLAGS) $(WARN_CFLAGS) $(CFLAGS)
+ALL_CFLAGS = $(ZILE_CPPFLAGS) $(CPPFLAGS) $(WARN_CFLAGS) $(PTHREAD_FLAGS) $(CFLAGS)
 
 OBJS = \
 	src/basic.o \
@@ -71,6 +73,7 @@ OBJS = \
 	src/line.o \
 	src/lisp.o \
 	src/macro.o \
+	src/magit.o \
 	src/main.o \
 	src/marker.o \
 	src/minibuf.o \
@@ -100,7 +103,7 @@ DOCS = AUTHORS FAQ NEWS README.md src/dotzile.sample
 all: src/xzile src/dotzile.sample
 
 src/xzile: $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(CC) $(PTHREAD_FLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
 
 $(OBJS) src/estr-test.o: src/xzile.h
 src/variables.o src/mkdotzile: src/tbl_vars.h
