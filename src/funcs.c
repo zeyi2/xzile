@@ -583,6 +583,26 @@ F_universal_argument (long uniarg, Args *args)
 }
 
 static bool
+F_sit_for (long uniarg, Args *args)
+{
+	(void) uniarg;
+	const char *arg = args_poll (args);
+	double secs = arg != NULL ? strtod (arg, NULL) : 0;
+	int64_t deadline = monotonic_ms () + (int64_t) (secs * 1000);
+	/* Redisplay and wait, serving subprocesses, until input arrives. */
+	for (;;) {
+		int64_t left = deadline - monotonic_ms ();
+		Keystroke key = getkey (left > 0 ? (int) left : 0);
+		if (key != KBD_NOKEY) {
+			ungetkey (key);
+			return false;
+		}
+		if (left <= 0)
+			return true;
+	}
+}
+
+static bool
 F_back_to_indentation (long uniarg, Args *args)
 {
 	(void) uniarg;
@@ -932,6 +952,10 @@ funcs_init (void)
 		       "\\[universal-argument] without digits or minus sign provides 4 as argument.\n"
 		       "Repeating \\[universal-argument] without digits or minus sign\n"
 		       " multiplies the argument by 4 each time.");
+
+	lisp_func_new ("sit-for", F_sit_for, false,
+		       "Redisplay, then wait for SECONDS seconds, or until input is available.\n"
+		       "Subprocess output is processed meanwhile.");
 
 	lisp_func_new ("back-to-indentation", F_back_to_indentation, true,
 		       "Move point to the first non-whitespace character on this line.");

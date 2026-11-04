@@ -249,8 +249,8 @@ color_distance_squared (int red_a, int green_a, int blue_a, int red_b, int green
 	return dr * dr + dg * dg + db * db;
 }
 
-static int
-nearest_ansi_color_16 (int red, int green, int blue)
+int
+color_rgb_to_16 (int red, int green, int blue)
 {
 	static const int reds[] = { 0, 205, 0, 205, 0, 205, 0, 229, 127, 255, 0, 255, 92, 255, 0, 255 };
 	static const int greens[] = { 0, 0, 205, 205, 0, 0, 205, 229, 127, 0, 255, 255, 92, 0, 255, 255 };
@@ -286,8 +286,8 @@ nearest_xterm_cube_level (int component)
 	return best_index;
 }
 
-static int
-rgb_to_xterm_256 (int red, int green, int blue)
+int
+color_rgb_to_256 (int red, int green, int blue)
 {
 	int red_index = nearest_xterm_cube_level (red);
 	int green_index = nearest_xterm_cube_level (green);
@@ -345,8 +345,8 @@ lookup_terminal_color (const char *color_name, const TerminalCapabilities *capab
 		return TERM_COLOR_UNSPECIFIED;
 
 	if (capabilities->color_count >= 256)
-		return rgb_to_xterm_256 (red, green, blue);
-	return nearest_ansi_color_16 (red, green, blue);
+		return color_rgb_to_256 (red, green, blue);
+	return color_rgb_to_16 (red, green, blue);
 }
 
 static int

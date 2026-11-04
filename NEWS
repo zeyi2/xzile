@@ -18,6 +18,24 @@ GNU Zile NEWS                                         -*- outline -*-
     k           hide lines                w         copy file names
     s           sort by name or date      q         bury the buffer
 
+  Terminals: M-x shell runs your login shell ($SHELL) in a terminal
+  emulator, so the shell's line editing, completion, prompts and
+  full-screen programs (vim, less, htop, ...) work as in a terminal
+  window, in colour. M-x term runs any program. All keys go to the
+  program except C-x, a prefix for the usual C-x commands (C-x C-x
+  sends C-x), and M-x. C-x C-y pastes killed text; C-x C-j shows the
+  scrollback as text to move around, search and copy, and C-x C-k or
+  q returns. The terminal follows its window's size.
+
+  Compilation: M-x compile runs a command (by default `make -k')
+  asynchronously, with its output in *compilation*. next-error (C-x `,
+  M-g n) and previous-error (M-g p) visit the errors and warnings of
+  GCC, Clang, Rust and Python, following make's directories. In the
+  buffer, RET visits the error at point, n and p move between errors,
+  g recompiles, C-c C-k interrupts and q buries it.
+
+  sit-for waits while processing subprocess output.
+
   Buffers can have their own key bindings, which take precedence over
   the global ones.
 

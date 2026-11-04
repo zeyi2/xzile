@@ -243,6 +243,7 @@ typedef unsigned Keystroke;
 #define KBD_F11 00432u
 #define KBD_F12 00433u
 #define KBD_BRACKETED_PASTE 00434u
+#define KBD_ESCAPE 00435u	/* A bare ESC, in terminal buffers. */
 
 typedef struct {
 	Keystroke *v;
@@ -325,8 +326,94 @@ unsigned term_getkey_unfiltered (int delay);
 void term_ungetkey (Keystroke key);
 char *term_take_pending_paste (void);
 
+/*--------------------------------------------------------------------------
+ * Terminal emulator (vterm.c).
+ *--------------------------------------------------------------------------*/
+
+typedef struct VTerm VTerm;
+
+#define VCOLOR_DEFAULT -1
+#define VCOLOR_RGB(r, g, b) (0x1000000 | ((r) << 16) | ((g) << 8) | (b))
+
+enum {
+	VATTR_BOLD = 1,
+	VATTR_DIM = 2,
+	VATTR_ITALIC = 4,
+	VATTR_UNDERLINE = 8,
+	VATTR_REVERSE = 16,
+	VATTR_INVISIBLE = 32,
+	VATTR_STRIKE = 64,
+};
+
+typedef struct {
+	int32_t fg, bg;		/* Palette index, VCOLOR_RGB value, or VCOLOR_DEFAULT. */
+	uint16_t flags;
+} VAttr;
+
+typedef struct {
+	uint32_t cp;		/* Code point; 0 for the right half of a wide char. */
+	uint8_t width;		/* 1, 2 for a wide char, 0 for its right half. */
+	VAttr attr;
+} VCell;
+
+/* Called to send replies (e.g. cursor position reports) to the program. */
+typedef void (*VTermWriteFn) (const char *s, size_t len, void *data);
+/* Called for OSC sequences, e.g. code 7 with the working directory. */
+typedef void (*VTermOscFn) (int code, const char *text, void *data);
+
+VTerm *vterm_new (int rows, int cols, VTermWriteFn write, VTermOscFn osc_fn, void *data);
+void vterm_free (VTerm *t);
+void vterm_write (VTerm *t, const char *s, size_t len);
+void vterm_resize (VTerm *t, int rows, int cols);
+int vterm_rows (const VTerm *t);
+int vterm_cols (const VTerm *t);
+const VCell *vterm_cell (const VTerm *t, int y, int x);
+void vterm_cursor (const VTerm *t, int *y, int *x);
+bool vterm_cursor_visible (const VTerm *t);
+bool vterm_app_cursor (const VTerm *t);
+bool vterm_bracketed_paste (const VTerm *t);
+size_t vterm_scrollback_len (const VTerm *t);
+const VCell *vterm_scrollback_line (const VTerm *t, size_t i, size_t *len);
+
+void term_set_vattr (const VAttr *a);
+void term_set_cursor_visible (bool visible);
+void term_get_cursor (size_t *y, size_t *x);
+int color_rgb_to_256 (int red, int green, int blue);
+int color_rgb_to_16 (int red, int green, int blue);
+
+/*--------------------------------------------------------------------------
+ * Subprocesses (process.c).
+ *--------------------------------------------------------------------------*/
+
+typedef struct Process Process;
+typedef void (*ProcessOutputFn) (Process *p, const char *data, size_t len, void *owner);
+typedef void (*ProcessExitFn) (Process *p, int status, void *owner);
+
+#define MAX_PROCESS_FDS 64
+
+/* Start `argv' in `dir'. `exec_path', if not NULL, is the program to
+   run (argv[0] may then differ, e.g. "-zsh"). `env' lists extra
+   NAME=VALUE settings. With `use_pty', the process runs on a
+   pseudo-terminal of the given size; otherwise its output is a pipe. */
+Process *process_start (const char *const *argv, const char *exec_path, const char *dir,
+			bool use_pty, int rows, int cols, const char *const *env,
+			ProcessOutputFn on_output, ProcessExitFn on_exit, void *owner);
+bool process_alive (const Process *p);
+pid_t process_pid (const Process *p);
+void process_send (Process *p, const char *s, size_t len);
+void process_signal (Process *p, int sig);
+void process_resize (Process *p, int rows, int cols);
+void process_free (Process *p);
+bool process_any_alive (void);
+void process_kill_all (void);
+struct pollfd;
+size_t process_poll_fds (struct pollfd *fds, size_t max);
+bool process_handle_events (const struct pollfd *fds, size_t n);
+bool process_reap (void);
+
 /* Redisplay (term_redisplay.c). */
 void term_redisplay (void);
+void redisplay_after_output (void);
 void term_redraw_cursor (void);
 void term_finish (void);
 
@@ -409,6 +496,8 @@ typedef struct Buffer Buffer;
 typedef struct Window Window;
 typedef struct Binding Binding;
 typedef struct Dired Dired;
+typedef struct Shell Shell;
+typedef struct Compilation Compilation;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
 
@@ -458,6 +547,9 @@ struct Buffer {
 
 	Binding *keymap;	/* Buffer-local key bindings, or NULL. */
 	Dired *dired;		/* Directory editor state, or NULL. */
+	Shell *shell;		/* Terminal emulator state, or NULL. */
+	Compilation *compilation; /* Compilation state, or NULL. */
+	char *mode_label;	/* Mode line name overriding the highlighter's. */
 
 	const Mode *highlighter;
 	int *syntax_states;	/* Parser state at the start of each line. */
@@ -604,6 +696,8 @@ void window_set_current (Window *wp);
 void wm_delete (Window *wp);
 void create_scratch_window (void);
 Window *popup_window (void);
+Window *window_showing (const Buffer *bp);
+void window_show_buffer (Window *wp, Buffer *bp, size_t o);
 void window_init (void);
 
 enum SplitKind { SPLIT_ROWS, SPLIT_COLS };
@@ -700,6 +794,7 @@ size_t minibuf_get_height (void);
 
 /* term_minibuf.c */
 void term_minibuf_write (const char *s);
+bool term_minibuf_active (void);
 char *term_minibuf_read (const char *prompt, const char *val, long pos, Completion *cp, History *hp);
 
 /*--------------------------------------------------------------------------
@@ -709,6 +804,7 @@ char *term_minibuf_read (const char *prompt, const char *val, long pos, Completi
 void init_default_bindings (void);
 Binding *keymap_new (void);
 void keymap_bind (Binding *map, const char *keystr, const char *func_name);
+void keymap_set_default (Binding *map, const char *func_name);
 void get_key_sequence (KeyVec *keys);
 LispFunc *get_function_by_keys (const KeyVec *keys);
 Keystroke binding_completion (const char *a);
@@ -780,6 +876,20 @@ bool find_file (const char *filename);
 int write_to_disk (Buffer *bp, const char *filename, mode_t mode);
 bool file_copy (const char *from, const char *to);
 void file_init (void);
+
+/* terminal.c */
+bool shell_char_mode (const Buffer *bp);
+bool shell_process_alive (const Buffer *bp);
+bool shell_draw (Window *wp, size_t topline, size_t leftcol);
+bool shell_cursor (Window *wp, size_t *y, size_t *x);
+void shell_send_paste (const char *text);
+void shell_free (Buffer *bp);
+void terminal_init (void);
+
+/* compile.c */
+void compilation_free (Buffer *bp);
+bool compilation_process_alive (const Buffer *bp);
+void compile_init (void);
 
 /* dired.c */
 bool dired (const char *dir);

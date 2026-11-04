@@ -118,6 +118,7 @@ draw_read (const char *prompt, const char *val, size_t prompt_len, const char *m
 	}
 
 	/* Place the cursor: prompt + margin + display columns from n to point. */
+	term_set_cursor_visible (true);
 	term_move (term_height () - 1, prompt_len + margin - 1 + (cursor_col - n_col));
 
 	term_refresh ();
@@ -281,9 +282,19 @@ other_key (ReadState *st, Keystroke c)
 	st->pos += ch_len;
 }
 
+static int reading = 0;
+
+/* Is the minibuffer being read? */
+bool
+term_minibuf_active (void)
+{
+	return reading > 0;
+}
+
 char *
 term_minibuf_read (const char *prompt, const char *val, long pos, Completion *cp, History *hp)
 {
+	reading++;
 	if (hp != NULL)
 		history_prepare (hp);
 
@@ -452,6 +463,7 @@ term_minibuf_read (const char *prompt, const char *val, long pos, Completion *cp
 		st.a = NULL;
 	}
 
+	reading--;
 	minibuf_clear ();
 	maybe_close_popup (cp);
 	return st.a;

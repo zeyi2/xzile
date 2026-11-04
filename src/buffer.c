@@ -596,6 +596,8 @@ buffer_get_filename_or_name (const Buffer *bp)
 const char *
 buffer_mode_name (const Buffer *bp)
 {
+	if (bp->mode_label != NULL)
+		return bp->mode_label;
 	return bp->highlighter != NULL ? bp->highlighter->name : "Fundamental";
 }
 
@@ -799,6 +801,9 @@ buffer_free (Buffer *bp)
 	}
 	free (own_mark);
 	dired_free (bp);
+	shell_free (bp);
+	compilation_free (bp);
+	free (bp->mode_label);
 	undo_free_all (bp);
 	if (bp->vars != NULL)
 		map_free (bp->vars, NULL);
@@ -1221,6 +1226,10 @@ F_kill_buffer (long uniarg, Args *args)
 
 	if (ok) {
 		if (!buffer_check_modified (bp))
+			ok = false;
+		else if ((shell_process_alive (bp) || compilation_process_alive (bp)) &&
+			 minibuf_read_yesno ("Buffer %s has a running process; kill it? (yes or no) ",
+					     bp->name) != 1)
 			ok = false;
 		else
 			buffer_kill (bp);

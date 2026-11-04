@@ -61,6 +61,7 @@ static const KeyInfo keyinfo[] = {
 	{ KBD_DOWN, "\\DOWN", "<down>" },
 	/* Kludge to make keystrings work in both Emacs and Zile. */
 	{ 033, "\\e", "ESC" },
+	{ KBD_ESCAPE, "\\ESC", "<escape>" },
 	{ KBD_END, "\\END", "<end>" },
 	{ KBD_F1, "\\F1", "<f1>" },
 	{ KBD_F10, "\\F10", "<f10>" },

@@ -90,10 +90,13 @@ enum {
 	ATTR_BOLD = 1,
 	ATTR_UNDERLINE = 2,
 	ATTR_REVERSE = 4,
+	ATTR_DIM = 8,
+	ATTR_ITALIC = 16,
+	ATTR_STRIKE = 32,
 };
 
 typedef struct {
-	int fg, bg;		/* Colour numbers, or TERM_COLOR_DEFAULT. */
+	int fg, bg;		/* Colour index, VCOLOR_RGB value, or TERM_COLOR_DEFAULT. */
 	unsigned flags;
 } Attr;
 
@@ -112,10 +115,14 @@ static bool phys_valid = false;
 static size_t cur_y = 0, cur_x = 0;
 static Attr cur_attr = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
 static TerminalCapabilities capabilities;
+static bool truecolor = false;
+static bool cursor_visible = true;
 
 static int signal_pipe[2] = { -1, -1 };
 static volatile sig_atomic_t winch_pending = 0;
 static volatile sig_atomic_t cont_pending = 0;
+static volatile sig_atomic_t chld_pending = 0;
+static bool input_eof = false;
 
 /* Pushed-back key codes (a stack: the last element is read first). */
 static unsigned *key_buf = NULL;
@@ -212,6 +219,14 @@ winch_handler (int signo)
 {
 	(void) signo;
 	winch_pending = 1;
+	wake_input ();
+}
+
+static void
+chld_handler (int signo)
+{
+	(void) signo;
+	chld_pending = 1;
 	wake_input ();
 }
 
@@ -328,8 +343,9 @@ detect_capabilities (void)
 
 	capabilities.has_colors = true;
 	capabilities.supports_default_colors = true;
+	truecolor = colorterm != NULL && (strcmp (colorterm, "truecolor") == 0 || strcmp (colorterm, "24bit") == 0);
 	if (strstr (term, "256color") != NULL || strstr (term, "truecolor") != NULL ||
-	    (colorterm != NULL && *colorterm != '\0'))
+	    strstr (term, "direct") != NULL || (colorterm != NULL && *colorterm != '\0'))
 		capabilities.color_count = 256;
 	else if (strstr (term, "16color") != NULL)
 		capabilities.color_count = 16;
@@ -355,6 +371,9 @@ term_init (void)
 	sa.sa_handler = winch_handler;
 	sigemptyset (&sa.sa_mask);
 	sigaction (SIGWINCH, &sa, NULL);
+	sa.sa_handler = chld_handler;
+	sa.sa_flags = SA_NOCLDSTOP;
+	sigaction (SIGCHLD, &sa, NULL);
 	install_tstp_handler ();
 
 	query_size ();
@@ -595,6 +614,39 @@ term_apply_face (const char *face_name)
 }
 
 void
+term_set_vattr (const VAttr *a)
+{
+	cur_attr.fg = a->fg;
+	cur_attr.bg = a->bg;
+	cur_attr.flags = 0;
+	if (a->flags & VATTR_BOLD)
+		cur_attr.flags |= ATTR_BOLD;
+	if (a->flags & VATTR_DIM)
+		cur_attr.flags |= ATTR_DIM;
+	if (a->flags & VATTR_ITALIC)
+		cur_attr.flags |= ATTR_ITALIC;
+	if (a->flags & VATTR_UNDERLINE)
+		cur_attr.flags |= ATTR_UNDERLINE;
+	if (a->flags & VATTR_REVERSE)
+		cur_attr.flags |= ATTR_REVERSE;
+	if (a->flags & VATTR_STRIKE)
+		cur_attr.flags |= ATTR_STRIKE;
+}
+
+void
+term_set_cursor_visible (bool visible)
+{
+	cursor_visible = visible;
+}
+
+void
+term_get_cursor (size_t *y, size_t *x)
+{
+	*y = cur_y;
+	*x = cur_x;
+}
+
+void
 term_beep (void)
 {
 	if (initialized)
@@ -618,11 +670,54 @@ cell_eq (const Cell *a, const Cell *b)
 	return attr_eq (a->attr, b->attr) && strcmp (a->ch, b->ch) == 0;
 }
 
+/* The RGB value of a colour in the xterm 256-colour palette. */
+static void
+palette_rgb (int c, int *r, int *g, int *b)
+{
+	static const int base[16][3] = {
+		{ 0, 0, 0 }, { 205, 0, 0 }, { 0, 205, 0 }, { 205, 205, 0 },
+		{ 0, 0, 238 }, { 205, 0, 205 }, { 0, 205, 205 }, { 229, 229, 229 },
+		{ 127, 127, 127 }, { 255, 0, 0 }, { 0, 255, 0 }, { 255, 255, 0 },
+		{ 92, 92, 255 }, { 255, 0, 255 }, { 0, 255, 255 }, { 255, 255, 255 },
+	};
+	static const int levels[] = { 0, 95, 135, 175, 215, 255 };
+	if (c < 16) {
+		*r = base[c][0];
+		*g = base[c][1];
+		*b = base[c][2];
+	} else if (c < 232) {
+		c -= 16;
+		*r = levels[c / 36];
+		*g = levels[(c / 6) % 6];
+		*b = levels[c % 6];
+	} else
+		*r = *g = *b = 8 + 10 * (c - 232);
+}
+
 static void
 add_color (StrBuf *sb, int color, int base, int bright_base, int ext)
 {
-	if (color < 0)
+	if (color < 0 || !capabilities.has_colors)
 		return;
+
+	int r, g, b;
+	bool rgb = (color & 0x1000000) != 0;
+	if (rgb) {
+		r = (color >> 16) & 0xff;
+		g = (color >> 8) & 0xff;
+		b = color & 0xff;
+		if (truecolor) {
+			sb_addf (sb, ";%d;2;%d;%d;%d", ext, r, g, b);
+			return;
+		}
+		color = capabilities.color_count >= 256 ? color_rgb_to_256 (r, g, b) : color_rgb_to_16 (r, g, b);
+	} else if (color >= 16 && capabilities.color_count < 256) {
+		palette_rgb (color, &r, &g, &b);
+		color = color_rgb_to_16 (r, g, b);
+	}
+
+	if (color >= 8 && capabilities.color_count < 16)
+		color -= 8;
 	if (color < 8)
 		sb_addf (sb, ";%d", base + color);
 	else if (color < 16)
@@ -637,6 +732,12 @@ add_sgr (StrBuf *sb, Attr a)
 	sb_add (sb, "\033[0");
 	if (a.flags & ATTR_BOLD)
 		sb_add (sb, ";1");
+	if (a.flags & ATTR_DIM)
+		sb_add (sb, ";2");
+	if (a.flags & ATTR_ITALIC)
+		sb_add (sb, ";3");
+	if (a.flags & ATTR_STRIKE)
+		sb_add (sb, ";9");
 	if (a.flags & ATTR_UNDERLINE)
 		sb_add (sb, ";4");
 	if (a.flags & ATTR_REVERSE)
@@ -695,7 +796,7 @@ term_refresh (void)
 	phys_valid = true;
 
 	sb_add (&sb, "\033[0m");
-	sb_addf (&sb, "\033[%zu;%zuH\033[?25h", cur_y + 1, cur_x + 1);
+	sb_addf (&sb, "\033[%zu;%zuH%s", cur_y + 1, cur_x + 1, cursor_visible ? "\033[?25h" : "");
 	write_all_fd (TERM_OUT, sb.s, sb.len);
 	sb_free (&sb);
 }
@@ -731,7 +832,8 @@ inq_unread (const unsigned char *bytes, size_t n)
 	inq_n += n;
 }
 
-static void
+/* Returns true if a subprocess changed state. */
+static bool
 handle_signal_wakeup (void)
 {
 	char buf[64];
@@ -742,6 +844,11 @@ handle_signal_wakeup (void)
 		phys_valid = false;
 		term_refresh ();
 	}
+	if (chld_pending) {
+		chld_pending = 0;
+		return process_reap ();
+	}
+	return false;
 }
 
 /* Read one byte from the terminal, waiting up to `delay' ms (forever if
@@ -766,13 +873,21 @@ read_byte (int delay)
 		if (delay >= 0) {
 			int64_t left = deadline - monotonic_ms ();
 			timeout = left > 0 ? (int) left : 0;
+		} else if (input_eof) {
+			fprintf (stderr, "%s: end of input\n", program_name);
+			zile_exit (EXIT_SIGNAL);
 		}
 
-		struct pollfd fds[2] = {
+		struct pollfd fds[2 + MAX_PROCESS_FDS] = {
 			{ TERM_IN, POLLIN, 0 },
 			{ signal_pipe[0], POLLIN, 0 },
 		};
-		int r = poll (fds, signal_pipe[0] >= 0 ? 2 : 1, timeout);
+		size_t nproc = process_poll_fds (fds + 2, MAX_PROCESS_FDS);
+		if (signal_pipe[0] < 0)
+			fds[1].fd = -1;
+		if (input_eof)
+			fds[0].fd = -1;
+		int r = poll (fds, (nfds_t) (2 + nproc), timeout);
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;
@@ -781,8 +896,19 @@ read_byte (int delay)
 		if (r == 0)
 			return CODE_NONE;
 
-		if (signal_pipe[0] >= 0 && (fds[1].revents & POLLIN)) {
-			handle_signal_wakeup ();
+		bool changed = false;
+		if (signal_pipe[0] >= 0 && (fds[1].revents & POLLIN))
+			changed = handle_signal_wakeup ();
+		if (nproc > 0 && process_handle_events (fds + 2, nproc))
+			changed = true;
+		if (changed)
+			redisplay_after_output ();
+		/* macOS cannot poll some devices, such as /dev/null. */
+		if (fds[0].revents & POLLNVAL)
+			input_eof = true;
+		if (!(fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
+			if (delay >= 0 && monotonic_ms () >= deadline)
+				return CODE_NONE;
 			continue;
 		}
 
@@ -798,11 +924,9 @@ read_byte (int delay)
 				fprintf (stderr, "%s: end of input\n", program_name);
 				zile_exit (EXIT_SIGNAL);
 			}
-			if (timeout > 0) {
-				/* Avoid spinning on a closed input. */
-				struct timespec ts = { timeout / 1000, (long) (timeout % 1000) * 1000000L };
-				nanosleep (&ts, NULL);
-			}
+			/* Keep serving subprocesses until the deadline. */
+			input_eof = true;
+			continue;
 			return CODE_NONE;
 		}
 	}
@@ -1173,6 +1297,7 @@ read_bracketed_paste_payload (void)
 Keystroke
 term_getkey (int delay)
 {
+	bool from_tty = key_buf_n == 0;
 	unsigned c = get_char (delay);
 
 	if (c == CODE_PASTE) {
@@ -1182,6 +1307,11 @@ term_getkey (int delay)
 	}
 
 	if (c == 033) {
+		/* In a terminal, ESC typed on its own (nothing followed it
+		   within the escape delay) is itself, not a Meta prefix. */
+		if (from_tty && inq_n == 0 && cur_bp != NULL && shell_char_mode (cur_bp) &&
+		    !term_minibuf_active ())
+			return KBD_ESCAPE;
 		Keystroke key = codetokey (get_char (GETKEY_DEFAULT));
 		while (key == KBD_META)
 			key = codetokey (get_char (GETKEY_DEFAULT)) | KBD_META;

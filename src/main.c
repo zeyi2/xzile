@@ -68,6 +68,7 @@ zile_exit (int reason)
 			abort ();
 	}
 
+	process_kill_all ();
 	debug_shutdown ();
 	exit (reason);
 }
@@ -351,6 +352,8 @@ main (int argc, char **argv)
 	buffer_init_lisp ();
 	bind_init ();
 	dired_init ();
+	terminal_init ();
+	compile_init ();
 	eval_init ();
 	file_init ();
 	funcs_init ();

@@ -54,6 +54,7 @@ OBJS = \
 	src/basic.o \
 	src/bind.o \
 	src/buffer.o \
+	src/compile.o \
 	src/completion.o \
 	src/debug.o \
 	src/dired.o \
@@ -73,6 +74,7 @@ OBJS = \
 	src/main.o \
 	src/marker.o \
 	src/minibuf.o \
+	src/process.o \
 	src/redisplay.o \
 	src/regex.o \
 	src/registers.o \
@@ -82,11 +84,13 @@ OBJS = \
 	src/term.o \
 	src/term_minibuf.o \
 	src/term_redisplay.o \
+	src/terminal.o \
 	src/theme.o \
 	src/undo.o \
 	src/utf8.o \
 	src/util.o \
 	src/variables.o \
+	src/vterm.o \
 	src/window.o
 
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o

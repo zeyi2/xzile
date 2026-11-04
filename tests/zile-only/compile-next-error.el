@@ -1,0 +1,10 @@
+; Visit compilation errors with next-error and previous-error.
+(compile "echo compile-next-error.input:1:1: error: first; echo compile-next-error.input:4:5: warning: second; echo compile-next-error.input:2:3: note: skipped")
+(sit-for 2)
+(next-error)
+(next-error)
+(insert "B")
+(previous-error)
+(insert "A")
+(save-buffer)
+(save-buffers-kill-emacs)

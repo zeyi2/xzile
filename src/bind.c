@@ -36,6 +36,7 @@ struct Binding {
 	BindEntry *map;		/* (Other node): key codes to bindings, sorted by key. */
 	size_t n, cap;
 	bool has_map;
+	LispFunc *default_func;	/* (Keymap root): for otherwise unbound keys. */
 	/* Note: the root is always a non-leaf node. */
 };
 
@@ -163,9 +164,15 @@ static enum Lookup
 lookup_keys (const KeyVec *keys, LispFunc **f)
 {
 	*f = NULL;
-	enum Lookup local = lookup_in (cur_bp != NULL ? cur_bp->keymap : NULL, keys, f);
+	Binding *local_map = cur_bp != NULL ? cur_bp->keymap : NULL;
+	enum Lookup local = lookup_in (local_map, keys, f);
 	if (local != LOOKUP_UNDEFINED)
 		return local;
+	/* A local default takes every single key it does not bind. */
+	if (local_map != NULL && local_map->default_func != NULL && keys->n == 1) {
+		*f = local_map->default_func;
+		return LOOKUP_FUNCTION;
+	}
 	return lookup_in (root_bindings, keys, f);
 }
 
@@ -230,7 +237,8 @@ LispFunc *
 get_function_by_keys (const KeyVec *keys)
 {
 	/* Detect Meta-digit */
-	if (keys->n == 1) {
+	bool local_default = cur_bp != NULL && cur_bp->keymap != NULL && cur_bp->keymap->default_func != NULL;
+	if (keys->n == 1 && !local_default) {
 		Keystroke key = keys->v[0];
 		if ((key & KBD_META) &&
 		    (isdigit ((int) (key & 0xff)) || (key & 0xff) == '-'))
@@ -246,6 +254,13 @@ Binding *
 keymap_new (void)
 {
 	return binding_new ();
+}
+
+void
+keymap_set_default (Binding *map, const char *func_name)
+{
+	map->default_func = lisp_func_find (func_name);
+	assert (map->default_func != NULL);
 }
 
 void
@@ -284,6 +299,11 @@ bracketed_paste_command (void)
 {
 	char *text = term_take_pending_paste ();
 	if (text == NULL || text[0] == '\0') {
+		free (text);
+		return true;
+	}
+	if (shell_char_mode (cur_bp)) {
+		shell_send_paste (text);
 		free (text);
 		return true;
 	}
@@ -409,6 +429,11 @@ static const struct {
 	{ "\\C-x0", "delete-window" },
 	{ "\\C-xd", "dired" },
 	{ "\\C-x\\C-j", "dired-jump" },
+	{ "\\C-x`", "next-error" },
+	{ "\\M-gn", "next-error" },
+	{ "\\M-g\\M-n", "next-error" },
+	{ "\\M-gp", "previous-error" },
+	{ "\\M-g\\M-p", "previous-error" },
 	{ "\\C-hb", "describe-bindings" },
 	{ "\\F1b", "describe-bindings" },
 	{ "\\C-hf", "describe-function" },

@@ -697,6 +697,14 @@ F_save_buffers_kill_emacs (long uniarg, Args *args)
 			break; /* We have found a modified buffer, so stop. */
 		}
 
+	if (process_any_alive ()) {
+		int ans = minibuf_read_yesno ("Active processes exist; kill them and exit anyway? (yes or no) ");
+		if (ans < 0)
+			return funcall ("keyboard-quit");
+		if (ans == 0)
+			return false;
+	}
+
 	zile_exit (EXIT_SUCCESS);
 }
 

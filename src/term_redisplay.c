@@ -275,7 +275,7 @@ update_gutter_width (WinNode *leaf, void *data)
 {
 	(void) data;
 	Window *wp = leaf->wp;
-	if (!buffer_has_linenum (wp->bp)) {
+	if (!buffer_has_linenum (wp->bp) || shell_char_mode (wp->bp)) {
 		wp->gutter_width = 0;
 		return;
 	}
@@ -334,12 +334,10 @@ draw_status_line (size_t line, size_t leftcol, Window *wp)
 }
 
 static void
-draw_window (size_t topline, size_t leftcol, Window *wp)
+draw_text (Window *wp, size_t topline, size_t leftcol, const Region *r)
 {
 	Buffer *bp = wp->bp;
 	size_t i, o;
-	Region r;
-	bool highlight = calculate_highlight_region (wp, &r);
 
 	/* Find the first line to display on the first screen line. */
 	for (o = buffer_start_of_line (bp, window_o (wp)), i = wp->topdelta; i > 0 && o > 0; --i) {
@@ -383,7 +381,7 @@ draw_window (size_t topline, size_t leftcol, Window *wp)
 			snprintf (gutter_str, sizeof gutter_str, "%*ld ", (int) (gutter_width - 1), num_to_show);
 		}
 
-		draw_line (i, leftcol, wp->start_column, wp, o, highlight ? &r : NULL, highlight,
+		draw_line (i, leftcol, wp->start_column, wp, o, r, r != NULL,
 			   cur_tab_width, gutter_str, gutter_width, gutter_face_name);
 
 		if (wp->start_column > 0) {
@@ -396,6 +394,19 @@ draw_window (size_t topline, size_t leftcol, Window *wp)
 	}
 
 	wp->all_displayed = o == NOPOS || o >= buffer_length (bp);
+
+}
+
+static void
+draw_window (size_t topline, size_t leftcol, Window *wp)
+{
+	Region r;
+	bool highlight = calculate_highlight_region (wp, &r);
+
+	if (shell_draw (wp, topline, leftcol))
+		wp->all_displayed = true;
+	else
+		draw_text (wp, topline, leftcol, highlight ? &r : NULL);
 
 	if (wp->fheight > wp->eheight)
 		draw_status_line (topline + wp->eheight, leftcol, wp);
@@ -489,8 +500,37 @@ term_redisplay (void)
 void
 term_redraw_cursor (void)
 {
-	if (cur_wp != NULL)
-		term_move (cur_topline + cur_wp->topdelta, cur_leftcol + cur_wp->gutter_width + col);
+	if (cur_wp == NULL)
+		return;
+	size_t y, x;
+	if (shell_char_mode (cur_wp->bp)) {
+		bool visible = shell_cursor (cur_wp, &y, &x);
+		term_set_cursor_visible (visible);
+		term_move (cur_topline + MIN (y, cur_wp->eheight - 1), cur_leftcol + MIN (x, cur_wp->ewidth - 1));
+		return;
+	}
+	term_set_cursor_visible (true);
+	term_move (cur_topline + cur_wp->topdelta, cur_leftcol + cur_wp->gutter_width + col);
+}
+
+/*
+ * Redisplay after a subprocess produced output, leaving the cursor in
+ * the minibuffer if it is being read.
+ */
+void
+redisplay_after_output (void)
+{
+	if (!term_initialized () || cur_wp == NULL)
+		return;
+	size_t y, x;
+	term_get_cursor (&y, &x);
+	window_resync (cur_wp);
+	term_redisplay ();
+	if (term_minibuf_active ()) {
+		term_set_cursor_visible (true);
+		term_move (y, x);
+	}
+	term_refresh ();
 }
 
 /*

@@ -207,6 +207,34 @@ popup_window (void)
 	return cur_wp->next != NULL ? cur_wp->next : head_wp;
 }
 
+/* The first window showing `bp', or NULL. */
+Window *
+window_showing (const Buffer *bp)
+{
+	for (Window *wp = head_wp; wp != NULL; wp = wp->next)
+		if (wp->bp == bp)
+			return wp;
+	return NULL;
+}
+
+/* Show `bp' in `wp' with point at `o', without selecting the window. */
+void
+window_show_buffer (Window *wp, Buffer *bp, size_t o)
+{
+	if (wp == cur_wp) {
+		buffer_switch_to (bp, true);
+		buffer_goto_offset (bp, o);
+		return;
+	}
+	wp->bp = bp;
+	if (wp->saved_pt == NULL)
+		wp->saved_pt = xzalloc (sizeof (Marker));
+	marker_move (wp->saved_pt, bp, o);
+	size_t n = buffer_offset_to_line (bp, o);
+	wp->topdelta = MIN (n, wp->eheight / 2);
+	wp->lastpointn = n;
+}
+
 static bool
 F_split_window (long uniarg, Args *args)
 {
