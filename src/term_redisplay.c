@@ -77,6 +77,22 @@ add_clipped (const char *s, size_t width)
  * `gutter_str`   – line number (or spaces) for the gutter; empty if gutter_width 0.
  * `gutter_width` – width of the gutter; text area width is wp->ewidth - gutter_width.
  */
+/* The brackets to show as matching (or not) in the window being drawn. */
+static size_t paren_at[2] = { NOPOS, NOPOS };
+static const char *paren_face;
+
+static void
+find_parens (Window *wp)
+{
+	paren_at[0] = paren_at[1] = NOPOS;
+	bool mismatch;
+	if (wp == cur_wp && get_variable_bool ("show-paren-mode") &&
+	    paren_match (wp->bp, window_o (wp), &paren_at[0], &paren_at[1], &mismatch))
+		paren_face = mismatch ? FACE_SHOW_PAREN_MISMATCH : FACE_SHOW_PAREN_MATCH;
+	else
+		paren_at[0] = paren_at[1] = NOPOS;
+}
+
 static void
 draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 	   size_t o, const Region *r, bool highlight, size_t cur_tab_width,
@@ -126,6 +142,8 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 		const char *face_name = FACE_DEFAULT;
 		if (syntax_faces != NULL && syntax_faces[i] != NULL)
 			face_name = syntax_faces[i];
+		if (o + i == paren_at[0] || o + i == paren_at[1])
+			face_name = paren_face;
 		term_apply_face (in_highlight ? FACE_REGION : face_name);
 
 		if (col < startcol) {
@@ -405,8 +423,11 @@ draw_window (size_t topline, size_t leftcol, Window *wp)
 
 	if (shell_draw (wp, topline, leftcol))
 		wp->all_displayed = true;
-	else
+	else {
+		find_parens (wp);
 		draw_text (wp, topline, leftcol, highlight ? &r : NULL);
+		paren_at[0] = paren_at[1] = NOPOS;
+	}
 
 	if (wp->fheight > wp->eheight)
 		draw_status_line (topline + wp->eheight, leftcol, wp);

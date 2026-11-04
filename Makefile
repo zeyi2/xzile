@@ -56,6 +56,7 @@ OBJS = \
 	src/basic.o \
 	src/bind.o \
 	src/buffer.o \
+	src/clipboard.o \
 	src/compile.o \
 	src/completion.o \
 	src/debug.o \
@@ -77,6 +78,7 @@ OBJS = \
 	src/main.o \
 	src/marker.o \
 	src/minibuf.o \
+	src/paren.o \
 	src/picker.o \
 	src/process.o \
 	src/redisplay.o \

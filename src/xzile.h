@@ -317,6 +317,7 @@ void term_init (void);
 void term_close (void);
 bool term_initialized (void);
 bool term_input_eof (void);
+void term_write_raw (const char *s, size_t len);
 size_t term_buf_len (void);
 void term_move (size_t y, size_t x);
 void term_clrtoeol (void);
@@ -963,6 +964,15 @@ void line_init (void);
 extern Estr *kill_ring_text;
 void maybe_destroy_kill_ring (void);
 void kill_ring_push (EstrView es);
+void kill_ring_take_clipboard (void);
+
+/* paren.c */
+bool paren_match (Buffer *bp, size_t pt, size_t *here, size_t *there, bool *mismatch);
+
+/* clipboard.c */
+void clipboard_changed (void);
+void clipboard_flush (void);
+char *clipboard_fetch (size_t *len);
 void killring_init (void);
 
 char *expand_path (const char *path);
@@ -1066,6 +1076,8 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_PICKER_MATCH "picker-match"
 #define FACE_PICKER_ANNOTATION "picker-annotation"
 #define FACE_PICKER_GROUP "picker-group"
+#define FACE_SHOW_PAREN_MATCH "show-paren-match"
+#define FACE_SHOW_PAREN_MISMATCH "show-paren-mismatch"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */

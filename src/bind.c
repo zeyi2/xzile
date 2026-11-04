@@ -221,6 +221,7 @@ get_key_sequence (KeyVec *keys)
 	keys->n = keys->cap = 0;
 
 	/* Follow files changed on disk while waiting for a command. */
+	clipboard_flush ();
 	Keystroke key;
 	for (bool all = false;; all = true) {
 		if (buffers_check_disk (all) && (thisflag & FLAG_NEED_RESYNC))

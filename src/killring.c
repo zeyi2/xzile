@@ -36,6 +36,21 @@ kill_ring_push (EstrView es)
 	if (kill_ring_text == NULL)
 		kill_ring_text = estr_new (es.eol);
 	estr_cat (kill_ring_text, es);
+	clipboard_changed ();
+}
+
+/* Make text another program copied to the clipboard the text to yank. */
+void
+kill_ring_take_clipboard (void)
+{
+	size_t len;
+	char *copied = clipboard_fetch (&len);
+	if (copied != NULL) {
+		estr_free (kill_ring_text);
+		kill_ring_text = estr_new (eol_lf);
+		estr_cat (kill_ring_text, ev_of (copied, len, eol_lf));
+		free (copied);
+	}
 }
 
 static bool
@@ -210,6 +225,7 @@ F_yank (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	kill_ring_take_clipboard ();
 	if (kill_ring_text == NULL) {
 		minibuf_error ("Kill ring is empty");
 		return false;

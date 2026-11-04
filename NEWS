@@ -46,6 +46,21 @@ GNU Zile NEWS                                         -*- outline -*-
   (and parsed in parallel), operations on thousands of files take one
   git command, and very large sections start collapsed.
 
+  When point is before an opening bracket or after a closing one, the
+  bracket and its match are highlighted (show-paren-match face), or
+  shown in the show-paren-mismatch face if they do not pair up or there
+  is no match. Brackets in strings and comments only match each other.
+  The variable show-paren-mode (default t) turns this off.
+
+  Kills and copies go to the system clipboard, and yank (and term-paste)
+  takes text that other programs have copied there since. Locally this
+  uses pbcopy and pbpaste on macOS, wl-copy and wl-paste on Wayland, or
+  xclip or xsel on X11. Over SSH, or without such a program, copies are
+  sent to the terminal as an OSC 52 escape sequence, which most modern
+  terminals (and tmux with set-clipboard on) put on the clipboard;
+  pasting there goes through the terminal's own paste. The variable
+  select-enable-clipboard (default t) turns this off.
+
   Buffers follow their files when these change on disk, for example
   after git checkout, pull or rebase: a buffer without unsaved changes
   is reverted, changing only the text that differs so point and the

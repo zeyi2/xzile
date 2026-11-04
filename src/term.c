@@ -166,6 +166,13 @@ out_str (const char *s)
 	write_all_fd (TERM_OUT, s, strlen (s));
 }
 
+/* Send bytes to the terminal outside the screen model. */
+void
+term_write_raw (const char *s, size_t len)
+{
+	write_all_fd (TERM_OUT, s, len);
+}
+
 static void
 enter_screen_mode (void)
 {

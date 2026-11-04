@@ -523,6 +523,7 @@ F_term_paste (long uniarg, Args *args)
 	(void) args;
 	if (!check_shell ())
 		return false;
+	kill_ring_take_clipboard ();
 	if (kill_ring_text == NULL) {
 		minibuf_error ("Kill ring is empty");
 		return false;

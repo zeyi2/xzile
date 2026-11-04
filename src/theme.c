@@ -98,6 +98,8 @@ static const char *const builtin_faces[] = {
 	FACE_PICKER_MATCH,
 	FACE_PICKER_ANNOTATION,
 	FACE_PICKER_GROUP,
+	FACE_SHOW_PAREN_MATCH,
+	FACE_SHOW_PAREN_MISMATCH,
 };
 
 static bool
@@ -398,6 +400,7 @@ apply_mono_fallback (const char *face_name, const TerminalCapabilities *capabili
 {
 	static const char *const strong[] = {
 		FACE_REGION, FACE_ISEARCH, FACE_MATCH, FACE_TRAILING_WHITESPACE, FACE_MODE_LINE,
+		FACE_SHOW_PAREN_MATCH, FACE_SHOW_PAREN_MISMATCH,
 	};
 	static const char *const subtle[] = {
 		FACE_LAZY_HIGHLIGHT, FACE_MODE_LINE_INACTIVE, FACE_MINIBUFFER_PROMPT,
@@ -556,6 +559,8 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_PICKER_MATCH, "yellow", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_PICKER_ANNOTATION, "brightblack", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "brightwhite", "magenta", NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "brightwhite", "red", NULL, T, U, U);
 }
 
 static void
@@ -601,6 +606,8 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_PICKER_MATCH, "yellow", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_PICKER_ANNOTATION, "brightblack", NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "white", "magenta", NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "white", "red", NULL, T, U, U);
 }
 
 static void
@@ -646,6 +653,8 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_PICKER_MATCH, NULL, NULL, NULL, T, T, U);
 	set_builtin_face (t, FACE_PICKER_ANNOTATION, NULL, NULL, NULL, U, U, U);
 	set_builtin_face (t, FACE_PICKER_GROUP, NULL, NULL, NULL, T, T, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, NULL, NULL, NULL, T, T, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, NULL, NULL, NULL, T, U, T);
 }
 
 static char *
