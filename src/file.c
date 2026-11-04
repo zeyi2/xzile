@@ -277,6 +277,10 @@ buffers_check_disk (bool all)
 	for (Buffer *bp = all ? head_bp : cur_bp; bp != NULL; bp = all ? bp->next : NULL) {
 		if (!buffer_disk_changed (bp))
 			continue;
+		if (preview_follow_disk (bp)) {
+			buffer_note_disk (bp);
+			continue;
+		}
 		if (!bp->modified) {
 			if (revert_from_disk (bp)) {
 				reverted++;
@@ -315,19 +319,23 @@ find_file (const char *filename)
 			return false;
 		}
 
-		Estr *es = estr_from_file (filename);
-		if (es != NULL) {
-			bp = buffer_new (es);
-			bp->readonly = !check_writable (filename);
-		} else
-			bp = buffer_new (NULL);
-		buffer_set_names (bp, filename);
-		free (bp->dir);
-		bp->dir = path_dirname (bp->filename);
+		bp = preview_visit (filename);
+		if (bp == NULL) {
+			Estr *es = estr_from_file (filename);
+			if (es != NULL) {
+				bp = buffer_new (es);
+				bp->readonly = !check_writable (filename);
+			} else
+				bp = buffer_new (NULL);
+			buffer_set_names (bp, filename);
+			free (bp->dir);
+			bp->dir = path_dirname (bp->filename);
 
-		/* Reset undo history. */
-		undo_free_all (bp);
-		bp->modified = false;
+			/* Reset undo history. */
+			undo_free_all (bp);
+			bp->modified = false;
+			html_after_visit (bp);
+		}
 		buffer_note_disk (bp);
 	}
 
@@ -545,6 +553,8 @@ write_buffer (Buffer *bp, bool needname, bool confirm, const char *name0, const 
 	bool ok = true;
 	char *name;
 
+	if (preview_refuse_save (bp))
+		return false;
 	if (!needname)
 		name = xstrdup (name0);
 	else {
@@ -850,12 +860,17 @@ F_revert_buffer (long uniarg, Args *args)
 	} else if (ans == 0)
 		return false;
 
+	if (preview_follow_disk (cur_bp)) {
+		buffer_note_disk (cur_bp);
+		return true;
+	}
 	if (!revert_from_disk (cur_bp)) {
 		minibuf_error ("%s: %s", cur_bp->filename, strerror (errno));
 		return false;
 	}
 	undo_free_all (cur_bp);
-	cur_bp->readonly = !check_writable (cur_bp->filename);
+	if (!preview_showing (cur_bp))
+		cur_bp->readonly = !check_writable (cur_bp->filename);
 	return true;
 }
 

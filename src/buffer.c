@@ -811,6 +811,8 @@ buffer_free (Buffer *bp)
 	shell_free (bp);
 	compilation_free (bp);
 	magit_free (bp);
+	preview_free (bp);
+	html_free (bp);
 	free (bp->mode_label);
 	undo_free_all (bp);
 	if (bp->vars != NULL)

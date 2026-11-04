@@ -358,6 +358,10 @@ main (int argc, char **argv)
 	terminal_init ();
 	compile_init ();
 	magit_init ();
+	preview_init ();
+	image_mode_init ();
+	pdf_mode_init ();
+	html_mode_init ();
 	selectors_init ();
 	eval_init ();
 	file_init ();

@@ -197,6 +197,17 @@ term_addch (char c)
 }
 
 void
+term_add_picture (size_t n)
+{
+	Attr saved = cur_attr;
+	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
+	cur_attr.flags = ATTR_PICTURE;
+	for (size_t i = 0; i < n; i++)
+		put_cell (" ", 1, 1);
+	cur_attr = saved;
+}
+
+void
 term_attrset (size_t attr)
 {
 	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;

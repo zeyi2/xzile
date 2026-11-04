@@ -28,6 +28,7 @@ enum {
 	ATTR_DIM = 8,
 	ATTR_ITALIC = 16,
 	ATTR_STRIKE = 32,
+	ATTR_PICTURE = 64,	/* Covered by a preview, in xzile-gui. */
 };
 
 typedef struct {

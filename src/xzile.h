@@ -332,6 +332,8 @@ void term_clrtoeol (void);
 void term_refresh (void);
 void term_clear (void);
 void term_addch (char c);
+/* `n' blank cells, which xzile-gui may cover with a preview. */
+void term_add_picture (size_t n);
 void term_addstr (const char *s);
 void term_addnstr (const char *s, size_t n);
 void term_attrset (size_t attr);
@@ -430,6 +432,9 @@ pid_t process_pid (const Process *p);
 void process_send (Process *p, const char *s, size_t len);
 void process_signal (Process *p, int sig);
 void process_resize (Process *p, int rows, int cols);
+/* A background process, such as a viewer window, is not waited for:
+   it does not count for process_any_alive. */
+void process_set_background (Process *p);
 void process_free (Process *p);
 bool process_any_alive (void);
 void process_kill_all (void);
@@ -532,6 +537,8 @@ typedef struct Dired Dired;
 typedef struct Shell Shell;
 typedef struct Compilation Compilation;
 typedef struct Magit Magit;
+typedef struct Preview Preview;
+typedef struct Html Html;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
 
@@ -595,6 +602,8 @@ struct Buffer {
 	Shell *shell;		/* Terminal emulator state, or NULL. */
 	Compilation *compilation; /* Compilation state, or NULL. */
 	Magit *magit;		/* Git interface state, or NULL. */
+	Preview *preview;	/* Image or PDF preview state, or NULL. */
+	Html *html;		/* HTML preview window state, or NULL. */
 	char *mode_label;	/* Mode line name overriding the highlighter's. */
 
 	const Mode *highlighter;
@@ -1048,6 +1057,45 @@ void magit_init (void);
 bool dired (const char *dir);
 void dired_free (Buffer *bp);
 void dired_init (void);
+
+/*--------------------------------------------------------------------------
+ * Image, PDF and HTML modes (modes/).
+ *--------------------------------------------------------------------------*/
+
+/* Previews of images and PDFs, drawn in their windows by xzile-gui
+   (modes/preview.c). */
+
+/* A preview buffer for `filename', if it is a binary file to show as
+   a preview rather than as text; or NULL. */
+Buffer *preview_visit (const char *filename);
+/* Whether the buffer is shown as a preview rather than as text. */
+bool preview_showing (const Buffer *bp);
+bool preview_draw (Window *wp, size_t topline, size_t leftcol);
+void preview_begin_redisplay (void);
+/* The status line text for a window showing a preview, or NULL. */
+char *preview_status (Window *wp);
+/* Whether saving `bp' would overwrite a file with what is not its
+   text; if so, says so. */
+bool preview_refuse_save (Buffer *bp);
+/* Reload a preview whose file changed. Returns true if the buffer has
+   no text to revert. */
+bool preview_follow_disk (Buffer *bp);
+void preview_free (Buffer *bp);
+/* For the mouse: whether cell `y', `x' shows a preview, and moving or
+   zooming it by pixels. `px', `py' are relative to cell 0, 0. */
+bool preview_at (size_t y, size_t x);
+bool preview_pointer_scroll (size_t y, size_t x, double dx, double dy, bool turn_pages);
+bool preview_pointer_zoom (size_t y, size_t x, double px, double py, double factor);
+void preview_init (void);
+void image_mode_init (void);
+void pdf_mode_init (void);
+
+/* HTML, edited as text and shown by a browser engine (modes/html.c). */
+
+/* Choose html-mode for an HTML file just visited. */
+void html_after_visit (Buffer *bp);
+void html_free (Buffer *bp);
+void html_mode_init (void);
 
 void search_init (void);
 void shell_init (void);

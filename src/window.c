@@ -374,7 +374,7 @@ mouse_leaf (size_t *y, size_t *x)
 static void
 move_point_to_cell (size_t y, size_t x)
 {
-	if (shell_char_mode (cur_bp))
+	if (shell_char_mode (cur_bp) || preview_showing (cur_bp))
 		return;
 	y = MIN (y, cur_wp->eheight > 0 ? cur_wp->eheight - 1 : 0);
 	buffer_move_line (cur_bp, (long) y - (long) cur_wp->topdelta);

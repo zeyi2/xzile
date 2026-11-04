@@ -47,6 +47,7 @@ struct Process {
 	ProcessExitFn on_exit;
 	void *data;
 	bool detached;		/* Freed by its owner: reap silently. */
+	bool background;	/* Not counted by process_any_alive. */
 	bool finished;		/* The exit callback has run. */
 };
 
@@ -259,6 +260,12 @@ unlink_process (Process *p)
 		}
 }
 
+void
+process_set_background (Process *p)
+{
+	p->background = true;
+}
+
 /* Detach a process from its owner, killing it if still running. */
 void
 process_free (Process *p)
@@ -281,7 +288,7 @@ bool
 process_any_alive (void)
 {
 	for (Process *p = processes; p != NULL; p = p->next)
-		if (!p->exited && !p->detached)
+		if (!p->exited && !p->detached && !p->background)
 			return true;
 	return false;
 }

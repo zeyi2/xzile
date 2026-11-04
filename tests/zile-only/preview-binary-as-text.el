@@ -1,0 +1,5 @@
+(end-of-buffer)
+(insert "Saved as text.")
+(newline)
+(save-buffer)
+(save-buffers-kill-emacs)

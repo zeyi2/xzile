@@ -324,13 +324,18 @@ draw_gui_status_line (size_t line, size_t leftcol, Window *wp)
 
 	const char *eol = buffer_eol (wp->bp);
 	char *pos = make_screen_pos (wp);
+	char *preview = preview_status (wp);
 	StrBuf right;
 	sb_init (&right);
-	sb_addf (&right, "Ln %zu, Col %zu   %s   %s   %s  ",
-		 buffer_offset_to_line (wp->bp, window_o (wp)) + 1,
-		 buffer_calculate_goalc (wp->bp, window_o (wp)) + 1, pos,
-		 strcmp (eol, eol_crlf) == 0 ? "CRLF" : strcmp (eol, eol_cr) == 0 ? "CR" : "LF",
-		 buffer_mode_name (wp->bp));
+	if (preview != NULL)
+		sb_addf (&right, "%s   %s  ", preview, buffer_mode_name (wp->bp));
+	else
+		sb_addf (&right, "Ln %zu, Col %zu   %s   %s   %s  ",
+			 buffer_offset_to_line (wp->bp, window_o (wp)) + 1,
+			 buffer_calculate_goalc (wp->bp, window_o (wp)) + 1, pos,
+			 strcmp (eol, eol_crlf) == 0 ? "CRLF" : strcmp (eol, eol_cr) == 0 ? "CR" : "LF",
+			 buffer_mode_name (wp->bp));
+	free (preview);
 	free (pos);
 
 	StrBuf left;
@@ -496,7 +501,7 @@ draw_window (size_t topline, size_t leftcol, Window *wp)
 	Region r;
 	bool highlight = calculate_highlight_region (wp, &r);
 
-	if (shell_draw (wp, topline, leftcol))
+	if (preview_draw (wp, topline, leftcol) || shell_draw (wp, topline, leftcol))
 		wp->all_displayed = true;
 	else {
 		find_parens (wp);
@@ -591,6 +596,7 @@ term_redisplay (void)
 
 	/* Draw the windows. */
 	cur_topline = 0;
+	preview_begin_redisplay ();
 	winnode_each_leaf (root_node, draw_leaf, NULL);
 
 	term_redraw_cursor ();
@@ -606,6 +612,11 @@ term_redraw_cursor (void)
 		bool visible = shell_cursor (cur_wp, &y, &x);
 		term_set_cursor_visible (visible);
 		term_move (cur_topline + MIN (y, cur_wp->eheight - 1), cur_leftcol + MIN (x, cur_wp->ewidth - 1));
+		return;
+	}
+	if (preview_showing (cur_wp->bp)) {
+		term_set_cursor_visible (false);
+		term_move (cur_topline, cur_leftcol);
 		return;
 	}
 	term_set_cursor_visible (true);

@@ -40,6 +40,8 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 
+#include "../modes/gui_preview.h"
+
 #if !SDL_VERSION_ATLEAST(2, 0, 18) || !SDL_TTF_VERSION_ATLEAST(2, 0, 18)
 #error "xzile-gui needs SDL and SDL_ttf 2.0.18 or later"
 #endif
@@ -329,6 +331,7 @@ load_fonts (void)
 	text_y = (cell_h - height) / 2;
 	ascent = TTF_FontAscent (fonts[0]);
 	pad = (int) lround (PADDING * scale);
+	gui_preview_set_metrics (pad, cell_w, cell_h, scale);
 }
 
 static void
@@ -689,6 +692,9 @@ render (void)
 		}
 	}
 
+	/* Images and PDF pages, which are drawn over blank cells. */
+	gui_preview_draw (phys, phys_rows, phys_cols);
+
 	/* Text. */
 	for (size_t y = 0; y < phys_rows; y++)
 		for (size_t x = 0; x < phys_cols; x++) {
@@ -845,7 +851,7 @@ chld_handler (int signo)
 }
 
 /* Mouse pointers: over text, and over dividers between windows. */
-static SDL_Cursor *cursor_ibeam, *cursor_rows, *cursor_cols, *cursor_shown;
+static SDL_Cursor *cursor_ibeam, *cursor_rows, *cursor_cols, *cursor_arrow, *cursor_shown;
 
 static void
 show_cursor (SDL_Cursor *c)
@@ -891,6 +897,7 @@ term_init (void)
 		fprintf (stderr, "%s: cannot open a window: %s\n", program_name, SDL_GetError ());
 		exit (EXIT_FAILURE);
 	}
+	gui_preview_init (renderer);
 
 	initialized = true;
 	update_scale ();
@@ -912,6 +919,7 @@ term_init (void)
 	cursor_ibeam = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_IBEAM);
 	cursor_rows = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZENS);
 	cursor_cols = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZEWE);
+	cursor_arrow = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_ARROW);
 	show_cursor (cursor_ibeam);
 	SDL_StartTextInput ();
 	update_theme_colors ();
@@ -928,6 +936,7 @@ term_close (void)
 	if (!initialized)
 		return;
 	initialized = false;
+	gui_preview_shutdown ();
 	glyph_cache_clear ();
 	close_fallbacks ();
 	for (int s = 0; s < NSTYLES; s++)
@@ -1259,6 +1268,27 @@ divider_cursor (const WinNode *split)
 	return split == NULL ? cursor_ibeam : split->kind == SPLIT_ROWS ? cursor_rows : cursor_cols;
 }
 
+/* The mouse pointer for cell `y', `x'. */
+static SDL_Cursor *
+pointer_at (size_t y, size_t x)
+{
+	WinNode *split = layout_divider_at (y, x);
+	return split == NULL && preview_at (y, x) ? cursor_arrow : divider_cursor (split);
+}
+
+/* Dragging a preview to move it. */
+static bool preview_drag;
+static size_t preview_drag_y, preview_drag_x;	/* The cell it began in. */
+static int preview_drag_px, preview_drag_py;	/* The last position. */
+
+/* A pointer position, in pixels from the top left of the text grid. */
+static void
+grid_pixels (int wx, int wy, double *px, double *py)
+{
+	*px = (double) wx * scale - pad;
+	*py = (double) wy * scale - pad;
+}
+
 static bool
 drag_begin (size_t y, size_t x)
 {
@@ -1334,7 +1364,16 @@ handle_event (const SDL_Event *ev)
 				break;
 			mouse_y = y;
 			mouse_x = x;
-			mouse_down = true;
+			if (preview_at (y, x)) {
+				/* Selects the window; dragging moves the preview. */
+				preview_drag = true;
+				preview_drag_y = y;
+				preview_drag_x = x;
+				preview_drag_px = ev->button.x;
+				preview_drag_py = ev->button.y;
+				SDL_CaptureMouse (SDL_TRUE);
+			} else
+				mouse_down = true;
 			queue_push (KBD_MOUSE_1);
 		} else if (ev->button.button == SDL_BUTTON_MIDDLE)
 			paste_clipboard ();
@@ -1343,9 +1382,13 @@ handle_event (const SDL_Event *ev)
 		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
 			mouse_down = false;
+			if (preview_drag) {
+				preview_drag = false;
+				SDL_CaptureMouse (SDL_FALSE);
+			}
 			drag_end ();
 			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
-			show_cursor (divider_cursor (layout_divider_at (y, x)));
+			show_cursor (pointer_at (y, x));
 		}
 		break;
 	case SDL_MOUSEMOTION: {
@@ -1358,8 +1401,22 @@ handle_event (const SDL_Event *ev)
 				drag_end ();
 			break;
 		}
+		if (preview_drag) {
+			if (!(ev->motion.state & SDL_BUTTON_LMASK)) {
+				preview_drag = false;
+				SDL_CaptureMouse (SDL_FALSE);
+				break;
+			}
+			double dx = (double) (ev->motion.x - preview_drag_px) * scale;
+			double dy = (double) (ev->motion.y - preview_drag_py) * scale;
+			preview_drag_px = ev->motion.x;
+			preview_drag_py = ev->motion.y;
+			if (preview_pointer_scroll (preview_drag_y, preview_drag_x, -dx, -dy, false))
+				redisplay_after_output ();
+			break;
+		}
 		if (!mouse_down)
-			show_cursor (divider_cursor (layout_divider_at (y, x)));
+			show_cursor (pointer_at (y, x));
 		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK)) {
 			if (y == mouse_y && x == mouse_x)
 				break;
@@ -1372,17 +1429,36 @@ handle_event (const SDL_Event *ev)
 		break;
 	}
 	case SDL_MOUSEWHEEL: {
-		float dy = ev->wheel.preciseY;
-		if (ev->wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+		float dy = ev->wheel.preciseY, dx = ev->wheel.preciseX;
+		if (ev->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
 			dy = -dy;
-		if (SDL_GetModState () & (KMOD_CTRL | KMOD_GUI)) {
+			dx = -dx;
+		}
+		int wx, wy;
+		SDL_GetMouseState (&wx, &wy);
+		size_t cy, cx;
+		pixel_to_cell (wx, wy, &cy, &cx);
+		SDL_Keymod mod = SDL_GetModState ();
+		if (preview_at (cy, cx)) {
+			/* Zoom about the pointer, or move by three lines a notch. */
+			double px, py;
+			grid_pixels (wx, wy, &px, &py);
+			bool moved = (mod & (KMOD_CTRL | KMOD_GUI))
+				? dy != 0 && preview_pointer_zoom (cy, cx, px, py, pow (1.25, dy))
+				: (mod & KMOD_SHIFT)
+				? preview_pointer_scroll (cy, cx, 3.0 * cell_h * (dx - dy), 0, false)
+				: preview_pointer_scroll (cy, cx, 3.0 * cell_h * dx, -3.0 * cell_h * dy, true);
+			if (moved)
+				redisplay_after_output ();
+			break;
+		}
+		if (mod & (KMOD_CTRL | KMOD_GUI)) {
 			if (dy != 0)
 				set_zoom (zoom + (dy > 0 ? 1 : -1));
 			break;
 		}
-		int wx, wy;
-		SDL_GetMouseState (&wx, &wy);
-		pixel_to_cell (wx, wy, &mouse_y, &mouse_x);
+		mouse_y = cy;
+		mouse_x = cx;
 		for (wheel_acc += dy; wheel_acc >= 1; wheel_acc -= 1)
 			queue_push (KBD_WHEEL_UP);
 		for (; wheel_acc <= -1; wheel_acc += 1)
@@ -1412,9 +1488,12 @@ handle_event (const SDL_Event *ev)
 	case SDL_RENDER_TARGETS_RESET:
 	case SDL_RENDER_DEVICE_RESET:
 		glyph_cache_clear ();
+		gui_preview_reset ();
 		render ();
 		break;
 	default:
+		if (ev->type == gui_preview_event () && gui_preview_poll ())
+			redisplay_after_output ();
 		break;
 	}
 }

@@ -15,6 +15,13 @@ functionality suitable for basic editing.
 is the same editor in a window of its own, with the system clipboard,
 mouse support, and the variables \fBgui-font\fR and
 \fBgui-font-size\fR to choose its font.
+If built with image and PDF support, it shows image and PDF files as
+previews that cannot be saved (\fBimage-mode\fR, \fBpdf-mode\fR;
+\fBpreview-binary-files\fR turns this off).
+In \fBhtml-mode\fR, \fBhtml-preview\fR (C-c C-v) shows the file in a
+browser engine window:
+.B xzile-html-preview
+on Linux, or the default browser.
 .SS "Initialization options:"
 .TP
 \fB\-\-no\-init\-file\fR, \fB\-q\fR

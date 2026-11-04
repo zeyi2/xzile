@@ -8,8 +8,21 @@ GNU Zile NEWS                                         -*- outline -*-
   same editor in a window with anti-aliased fonts, truecolor themes
   (xzile-dark and xzile-light), a modern status bar, mouse selection
   and scrolling, the system clipboard, and Command/Super shortcuts.
-  It needs SDL2 and SDL2_ttf. Set the font with gui-font and
+  It needs SDL2, SDL2_ttf, SDL2_image, poppler-glib and cairo, plus
+  WebKitGTK on Linux. Set the font with gui-font and
   gui-font-size.
+
+  Previews are included in `make gui': visiting an image or a PDF
+  shows it in the window,
+  with zooming, panning, fitting, page turning and reloading, and
+  without loading the file as text or letting it be saved. image-mode
+  and pdf-mode show the visited file so; C-c C-c returns to its text.
+  Decoding is done on the CPU in background threads, only once the
+  image's header has given a size within bounds; zooming and panning
+  reuse the textures. html-mode edits HTML, and C-c C-v
+  (html-preview) shows the file in a browser engine window, the
+  WebKitGTK helper xzile-html-preview on Linux (built by make gui), or
+  the default browser on macOS.
 
   Dired, a directory editor as in Emacs. Open it with C-x d (dired),
   C-x C-j (dired-jump), or by visiting a directory. In a Dired buffer:
