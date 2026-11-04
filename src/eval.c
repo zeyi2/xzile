@@ -58,29 +58,62 @@ execute_function (const char *name, long uniarg, bool is_uniarg)
 }
 
 /*
- * Read a function name from the minibuffer.
+ * Read a function name from the minibuffer, showing each command's key
+ * and documentation, with recently used commands first.
  */
 static History *functions_history = NULL;
+
+static int
+compare_names (const void *a, const void *b)
+{
+	return strcmp (*(char *const *) a, *(char *const *) b);
+}
+
 char *
 minibuf_read_function_name (const char *fmt, ...)
 {
-	Completion *cp = completion_new (false);
-
+	StrVec names = { NULL, 0, 0 }, annotations = { NULL, 0, 0 };
+	Map *seen = map_new ();
+	for (size_t i = functions_history->elements.n; i > 0; i--) {
+		const char *name = functions_history->elements.v[i - 1];
+		if (map_get (seen, name) == NULL && lisp_func_find (name) != NULL) {
+			map_set (seen, name, (void *) 1);
+			sv_push (&names, name);
+		}
+	}
+	size_t nrecent = names.n;
 	MapIter it;
 	const char *name;
 	void *val;
 	map_iter_init (&it);
 	while (map_iter_next (lisp_funcs, &it, &name, &val))
-		if (((LispFunc *) val)->interactive)
-			sv_add_sorted (&cp->completions, name);
+		if (((LispFunc *) val)->interactive && map_get (seen, name) == NULL)
+			sv_push (&names, name);
+	qsort (names.v + nrecent, names.n - nrecent, sizeof (char *), compare_names);
+
+	Map *keys = map_new ();
+	bindings_by_function (keys);
+	for (size_t i = 0; i < names.n; i++) {
+		LispFunc *f = lisp_func_find (names.v[i]);
+		const char *key = map_get (keys, names.v[i]);
+		size_t doc_len = f->doc != NULL ? strcspn (f->doc, "\n") : 0;
+		char *ann = xasprintf ("%-12s %.*s", key != NULL ? key : "", (int) doc_len, f->doc != NULL ? f->doc : "");
+		sv_push (&annotations, ann);
+		free (ann);
+	}
+	map_free (keys, free);
+	map_free (seen, NULL);
 
 	va_list ap;
 	va_start (ap, fmt);
-	char *ms = minibuf_vread_completion (fmt, "", cp, functions_history,
-					     "No function name given",
-					     "Undefined function name `%s'", ap);
+	char *prompt = xvasprintf (fmt, ap);
 	va_end (ap);
-	completion_free (cp);
+	char *ms = picker_read_name (prompt, &names, &annotations, NULL, true, -1);
+	free (prompt);
+	if (ms != NULL)
+		history_add_element (functions_history, ms);
+	sv_clear (&names);
+	sv_clear (&annotations);
 	return ms;
 }
 

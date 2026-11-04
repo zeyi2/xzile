@@ -156,3 +156,38 @@ utf8_encode (uint32_t cp, char *out)
 	out[3] = (char) (0x80 | (cp & 0x3F));
 	return 4;
 }
+
+/* Feed a typed byte; returns true with a whole character in `out' once
+   one is complete. Invalid sequences are dropped. */
+bool
+utf8_pending_feed (Utf8Pending *acc, unsigned char b, char *out, size_t *out_len)
+{
+	if (acc->n == 0) {
+		int need = utf8_seq_len (b);
+		if (need <= 1) {
+			out[0] = (char) b;
+			*out_len = 1;
+			return true;
+		}
+		acc->bytes[0] = b;
+		acc->n = 1;
+		acc->need = (size_t) need;
+		return false;
+	}
+	if ((b & 0xC0) != 0x80) {
+		acc->n = 0;
+		return utf8_pending_feed (acc, b, out, out_len);
+	}
+	acc->bytes[acc->n++] = b;
+	if (acc->n < acc->need)
+		return false;
+	size_t char_len;
+	uint32_t cp = utf8_decode ((const char *) acc->bytes, acc->n, 0, &char_len);
+	size_t n = acc->n;
+	acc->n = 0;
+	if (cp == UTF8_REPLACEMENT && char_len != n)
+		return false;
+	memcpy (out, acc->bytes, n);
+	*out_len = n;
+	return true;
+}

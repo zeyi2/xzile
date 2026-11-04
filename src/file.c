@@ -171,6 +171,8 @@ find_file (const char *filename)
 	}
 
 	buffer_switch_to (bp, true);
+	if (bp->filename != NULL)
+		recentf_add (bp->filename);
 	thisflag |= FLAG_NEED_RESYNC;
 	return true;
 }
@@ -455,7 +457,7 @@ F_find_file (long uniarg, Args *args)
 	bool ok = true;
 	char *filename = xstrdup_or_null (args_poll (args));
 	if (filename == NULL) {
-		filename = minibuf_read_filename ("Find file: ", cur_bp->dir, NULL);
+		filename = minibuf_read_file_to_visit ("Find file: ", cur_bp->dir, NULL);
 		if (filename == NULL)
 			ok = funcall ("keyboard-quit");
 	}
@@ -490,7 +492,7 @@ F_find_alternate_file (long uniarg, Args *args)
 		buf = cur_bp->dir;
 	else
 		basename = path_basename (buf);
-	char *ms = minibuf_read_filename ("Find alternate: ", buf, basename);
+	char *ms = minibuf_read_file_to_visit ("Find alternate: ", buf, basename);
 	free (basename);
 
 	bool ok = false;
@@ -505,86 +507,6 @@ F_find_alternate_file (long uniarg, Args *args)
 }
 
 static bool
-F_switch_to_buffer (long uniarg, Args *args)
-{
-	(void) uniarg;
-	Buffer *bp = cur_bp->next != NULL ? cur_bp->next : head_bp;
-
-	bool ok = true;
-	char *buf = xstrdup_or_null (args_poll (args));
-	if (buf == NULL) {
-		Completion *cp = buffer_make_completion ();
-		buf = minibuf_read_completion ("Switch to buffer (default %s): ", "", cp, NULL, bp->name);
-		completion_free (cp);
-
-		if (buf == NULL)
-			ok = funcall ("keyboard-quit");
-	}
-	if (buf == NULL)
-		ok = false;
-
-	if (ok) {
-		if (buf[0] != '\0') {
-			bp = buffer_find (buf);
-			if (bp == NULL) {
-				bp = buffer_new (NULL);
-				bp->name = xstrdup (buf);
-				bp->needname = true;
-				bp->nosave = true;
-			}
-		}
-
-		buffer_switch_to (bp, true);
-	}
-
-	free (buf);
-	return ok;
-}
-
-static bool
-F_insert_buffer (long uniarg, Args *args)
-{
-	(void) uniarg;
-	Buffer *def_bp = cur_bp->next != NULL ? cur_bp->next : head_bp;
-
-	if (buffer_warn_if_readonly (cur_bp))
-		return false;
-
-	bool ok = true;
-	char *buf = xstrdup_or_null (args_poll (args));
-	if (buf == NULL) {
-		Completion *cp = buffer_make_completion ();
-		buf = minibuf_read_completion ("Insert buffer (default %s): ", "", cp, NULL, def_bp->name);
-		completion_free (cp);
-		if (buf == NULL)
-			ok = funcall ("keyboard-quit");
-	}
-	if (buf == NULL)
-		ok = false;
-
-	if (ok) {
-		Buffer *bp;
-
-		if (buf[0] != '\0') {
-			bp = buffer_find (buf);
-			if (bp == NULL) {
-				minibuf_error ("Buffer `%s' not found", buf);
-				ok = false;
-			}
-		} else
-			bp = def_bp;
-
-		if (ok) {
-			buffer_insert_buffer (cur_bp, bp);
-			funcall ("set-mark-command");
-		}
-	}
-
-	free (buf);
-	return ok;
-}
-
-static bool
 F_insert_file (long uniarg, Args *args)
 {
 	(void) uniarg;
@@ -594,7 +516,7 @@ F_insert_file (long uniarg, Args *args)
 	bool ok = true;
 	char *file = xstrdup_or_null (args_poll (args));
 	if (file == NULL) {
-		file = minibuf_read_filename ("Insert file: ", cur_bp->dir, NULL);
+		file = minibuf_read_file_to_visit ("Insert file: ", cur_bp->dir, NULL);
 		if (file == NULL)
 			ok = funcall ("keyboard-quit");
 	}
@@ -796,13 +718,6 @@ file_init (void)
 		       "Find the file specified by the user, select its buffer, kill previous buffer.\n"
 		       "If the current buffer now contains an empty file that you just visited\n"
 		       "(presumably by mistake), use this command to visit the file you really want.");
-
-	lisp_func_new ("switch-to-buffer", F_switch_to_buffer, true,
-		       "Select buffer BUFFER in the current window.");
-
-	lisp_func_new ("insert-buffer", F_insert_buffer, true,
-		       "Insert after point the contents of BUFFER.\n"
-		       "Puts mark after the inserted text.");
 
 	lisp_func_new ("insert-file", F_insert_file, true,
 		       "Insert contents of file FILENAME into buffer after point.\n"

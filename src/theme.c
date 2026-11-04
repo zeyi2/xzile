@@ -94,6 +94,10 @@ static const char *const builtin_faces[] = {
 	FACE_MAGIT_BRANCH_LOCAL,
 	FACE_MAGIT_BRANCH_REMOTE,
 	FACE_MAGIT_LOG_DATE,
+	FACE_PICKER_SELECTION,
+	FACE_PICKER_MATCH,
+	FACE_PICKER_ANNOTATION,
+	FACE_PICKER_GROUP,
 };
 
 static bool
@@ -548,6 +552,10 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "cyan", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "green", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_SELECTION, NULL, "brightblack", NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_MATCH, "yellow", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_ANNOTATION, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
 }
 
 static void
@@ -589,6 +597,10 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "blue", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "green", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_SELECTION, "black", "cyan", NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_MATCH, "yellow", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_ANNOTATION, "brightblack", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
 }
 
 static void
@@ -630,6 +642,10 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, NULL, NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, NULL, NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_MAGIT_LOG_DATE, NULL, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_SELECTION, NULL, NULL, NULL, T, U, T);
+	set_builtin_face (t, FACE_PICKER_MATCH, NULL, NULL, NULL, T, T, U);
+	set_builtin_face (t, FACE_PICKER_ANNOTATION, NULL, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_GROUP, NULL, NULL, NULL, T, T, U);
 }
 
 static char *
@@ -644,10 +660,10 @@ minibuf_read_theme_name (const char *fmt, ...)
 
 	va_list ap;
 	va_start (ap, fmt);
-	char *ms = minibuf_vread_completion (fmt, "", cp, NULL,
-					     "No theme name given",
-					     "Undefined theme `%s'", ap);
+	char *prompt = xvasprintf (fmt, ap);
 	va_end (ap);
+	char *ms = picker_read_name (prompt, &cp->completions, NULL, NULL, true, -1);
+	free (prompt);
 	completion_free (cp);
 	return ms;
 }

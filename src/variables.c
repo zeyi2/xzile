@@ -125,13 +125,19 @@ minibuf_read_variable_name (const char *fmt, ...)
 	map_iter_init (&it);
 	while (map_iter_next (main_vars, &it, NULL, &val))
 		sv_add_sorted (&cp->completions, ((VarEntry *) val)->name);
+	StrVec annotations = { NULL, 0, 0 };
+	for (size_t i = 0; i < cp->completions.n; i++) {
+		const char *v = get_variable (cp->completions.v[i]);
+		sv_push (&annotations, v != NULL ? v : "");
+	}
 
 	va_list ap;
 	va_start (ap, fmt);
-	char *ms = minibuf_vread_completion (fmt, "", cp, NULL,
-					     "No variable name given",
-					     "Undefined variable name `%s'", ap);
+	char *prompt = xvasprintf (fmt, ap);
 	va_end (ap);
+	char *ms = picker_read_name (prompt, &cp->completions, &annotations, NULL, true, -1);
+	free (prompt);
+	sv_clear (&annotations);
 	completion_free (cp);
 	return ms;
 }

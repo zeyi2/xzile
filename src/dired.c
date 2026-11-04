@@ -888,7 +888,7 @@ F_dired (long uniarg, Args *args)
 	(void) uniarg;
 	char *dir = xstrdup_or_null (args_poll (args));
 	if (dir == NULL) {
-		dir = minibuf_read_filename ("Dired (directory): ", cur_bp->dir, NULL);
+		dir = minibuf_read_file_to_visit ("Dired (directory): ", cur_bp->dir, NULL);
 		if (dir == NULL)
 			return funcall ("keyboard-quit");
 	}

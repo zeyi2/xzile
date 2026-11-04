@@ -46,6 +46,23 @@ GNU Zile NEWS                                         -*- outline -*-
   (and parsed in parallel), operations on thousands of files take one
   git command, and very large sections start collapsed.
 
+  A new picker reads names: candidates are listed below the prompt and
+  narrowed as you type, matching fuzzily (space-separated words, in
+  any order; upper case makes matching case-sensitive). C-n and C-p
+  move, RET chooses, C-j uses the input as typed, TAB inserts the
+  candidate, M-p and M-n recall history, and C-g cancels.
+
+  C-x b (switch-to-buffer) offers buffers, recently visited files
+  (kept in ~/.xzile-recentf) and the files of the current Git project,
+  previewing each in the window; C-o chooses for the other window and
+  C-k kills the selected buffer. With empty input it chooses the
+  previous buffer, as before. C-x k, insert-buffer, M-x (showing each
+  command's key and documentation, recent commands first),
+  describe-variable and set-variable (showing values), load-theme,
+  Magit's branch prompts, and file prompts (C-x C-f and the like,
+  which list the directory as you type) use it too. Large candidate
+  lists are scored on several threads.
+
   sit-for waits while processing subprocess output.
 
   Buffers can have their own key bindings, which take precedence over

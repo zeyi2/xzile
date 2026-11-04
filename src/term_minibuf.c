@@ -291,6 +291,18 @@ term_minibuf_active (void)
 	return reading > 0;
 }
 
+void
+term_minibuf_enter (void)
+{
+	reading++;
+}
+
+void
+term_minibuf_leave (void)
+{
+	reading--;
+}
+
 char *
 term_minibuf_read (const char *prompt, const char *val, long pos, Completion *cp, History *hp)
 {

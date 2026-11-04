@@ -593,6 +593,24 @@ walk_bindings (BindingsProcessor process, void *data)
 	sv_clear (&keys);
 }
 
+static void
+first_binding_process (const char *key, Binding *p, void *data)
+{
+	Map *m = data;
+	char *old = map_get (m, p->func->name);
+	if (old == NULL || strlen (key) < strlen (old)) {
+		free (old);
+		map_set (m, p->func->name, xstrdup (key));
+	}
+}
+
+/* Map each bound function's name to its shortest key (owned strings). */
+void
+bindings_by_function (Map *out)
+{
+	walk_bindings (first_binding_process, out);
+}
+
 static bool
 F_global_set_key (long uniarg, Args *args)
 {

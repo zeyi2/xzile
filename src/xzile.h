@@ -202,6 +202,15 @@ size_t utf8_next_char (const char *s, size_t len, size_t i);
 size_t utf8_prev_char (const char *s, size_t len, size_t i);
 size_t utf8_encode (uint32_t cp, char *out);
 
+/* Accumulates typed bytes into whole UTF-8 characters. */
+typedef struct {
+	unsigned char bytes[4];
+	size_t n;
+	size_t need;
+} Utf8Pending;
+
+bool utf8_pending_feed (Utf8Pending *acc, unsigned char b, char *out, size_t *out_len);
+
 /*--------------------------------------------------------------------------
  * Keyboard handling (keycode.c, getkey.c).
  *--------------------------------------------------------------------------*/
@@ -793,6 +802,7 @@ void minibuf_error (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read (const char *fmt, const char *value, ...) PRINTF_LIKE (1, 3);
 long minibuf_read_number (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_filename (const char *fmt, const char *value, const char *file, ...) PRINTF_LIKE (1, 4);
+char *minibuf_read_file_to_visit (const char *fmt, const char *value, const char *file, ...) PRINTF_LIKE (1, 4);
 int minibuf_read_yesno (const char *fmt, ...) PRINTF_LIKE (1, 2);
 int minibuf_read_y_or_n (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_completion (const char *fmt, const char *val, Completion *cp, History *hp, ...) PRINTF_LIKE (1, 5);
@@ -804,6 +814,68 @@ size_t minibuf_get_height (void);
 /* term_minibuf.c */
 void term_minibuf_write (const char *s);
 bool term_minibuf_active (void);
+void term_minibuf_enter (void);
+void term_minibuf_leave (void);
+void minibuf_set_reserved_height (size_t h);
+
+/*--------------------------------------------------------------------------
+ * Picker (picker.c, selectors.c).
+ *--------------------------------------------------------------------------*/
+
+typedef struct Picker Picker;
+
+typedef struct {
+	char *text;		/* Matched, shown and returned. */
+	char *annotation;
+	int group;
+	void *data;
+} PickerItem;
+
+typedef struct {
+	const char *prompt;
+	const char *initial;		/* Initial input. */
+	const char *const *groups;	/* Group titles, indexed by item group; or NULL. */
+	bool require_match;		/* RET must choose a candidate. */
+	bool preselect;			/* Preselect strong matches. */
+	unsigned fuzzy_groups;		/* Groups whose fuzzy matches are preselected too. */
+	bool file_mode;			/* The input is a path; list its directory. */
+	bool other_window;		/* C-o chooses for the other window. */
+	int default_item;		/* Selected with empty input, or -1. */
+	History *history;
+	/* Called when the selection changes. */
+	void (*preview) (PickerItem *it, void *data);
+	/* C-k on a candidate; returns true if it should be removed. */
+	bool (*kill) (PickerItem *it, void *data);
+	/* Run in a thread to add candidates with picker_add_async. */
+	void (*async) (Picker *p, void *data);
+	/* Filters asynchronous candidates, on the main thread. */
+	bool (*accept_async) (const char *text, void *data);
+	void *data;
+} PickerSpec;
+
+enum PickerResult { PICK_CANCEL, PICK_ITEM, PICK_INPUT };
+
+typedef struct {
+	enum PickerResult kind;
+	int item;		/* For PICK_ITEM. */
+	char *input;		/* The input, or for files the chosen path. */
+	bool other_window;
+} PickerChoice;
+
+Picker *picker_new (const PickerSpec *spec);
+void picker_add (Picker *p, const char *text, const char *annotation, int group, void *data);
+void picker_add_async (Picker *p, const char *text, const char *annotation, int group);
+PickerItem *picker_item (Picker *p, int i);
+void picker_run (Picker *p, PickerChoice *choice);
+void picker_free (Picker *p);
+
+char *picker_read_name (const char *prompt, StrVec *names, StrVec *annotations,
+			History *hp, bool require_match, int default_item);
+char *picker_read_file (const char *prompt, const char *initial, History *hp, bool visit);
+void recentf_add (const char *path);
+void recentf_load (void);
+void recentf_save (void);
+void selectors_init (void);
 char *term_minibuf_read (const char *prompt, const char *val, long pos, Completion *cp, History *hp);
 
 /*--------------------------------------------------------------------------
@@ -811,6 +883,7 @@ char *term_minibuf_read (const char *prompt, const char *val, long pos, Completi
  *--------------------------------------------------------------------------*/
 
 void init_default_bindings (void);
+void bindings_by_function (Map *out);
 Binding *keymap_new (void);
 void keymap_bind (Binding *map, const char *keystr, const char *func_name);
 void keymap_set_default (Binding *map, const char *func_name);
@@ -974,6 +1047,10 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_MAGIT_BRANCH_LOCAL "magit-branch-local"
 #define FACE_MAGIT_BRANCH_REMOTE "magit-branch-remote"
 #define FACE_MAGIT_LOG_DATE "magit-log-date"
+#define FACE_PICKER_SELECTION "picker-selection"
+#define FACE_PICKER_MATCH "picker-match"
+#define FACE_PICKER_ANNOTATION "picker-annotation"
+#define FACE_PICKER_GROUP "picker-group"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */

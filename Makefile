@@ -77,11 +77,13 @@ OBJS = \
 	src/main.o \
 	src/marker.o \
 	src/minibuf.o \
+	src/picker.o \
 	src/process.o \
 	src/redisplay.o \
 	src/regex.o \
 	src/registers.o \
 	src/search.o \
+	src/selectors.o \
 	src/shell.o \
 	src/syntax.o \
 	src/term.o \

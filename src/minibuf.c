@@ -23,6 +23,7 @@
 static History *files_history;
 static char *contents;
 static bool error_displayed;
+static size_t reserved_height;	/* Rows kept for a picker. */
 
 /*--------------------------------------------------------------------------
  * Minibuffer wrapper functions.
@@ -152,49 +153,56 @@ minibuf_read_number (const char *fmt, ...)
 	return n;
 }
 
+static char *
+vread_filename (bool visit, const char *fmt, const char *value, const char *file, va_list ap)
+{
+	size_t vlen = strlen (value);
+	char *a = file == NULL && vlen > 0 && value[vlen - 1] != '/'
+		? xstrcat3 (value, "/", "") : xstrdup (value);
+	char *ea = expand_path (a);
+	free (a);
+	if (ea == NULL)
+		return NULL;
+
+	char *prompt = xvasprintf (fmt, ap);
+	char *initial = compact_path (ea);
+	free (ea);
+	if (file == NULL && !str_has_suffix (initial, "/")) {
+		char *t = xstrcat3 (initial, "/", "");
+		free (initial);
+		initial = t;
+	}
+	char *p = picker_read_file (prompt, initial, files_history, visit);
+	free (prompt);
+	free (initial);
+	if (p != NULL)
+		history_add_element (files_history, p);
+	return p;
+}
+
 /*
- * Read a filename from the minibuffer.
+ * Read a filename from the minibuffer, for a name that may be new.
  */
 char *
 minibuf_read_filename (const char *fmt, const char *value, const char *file, ...)
 {
-	char *p = NULL;
+	va_list ap;
+	va_start (ap, file);
+	char *p = vread_filename (false, fmt, value, file, ap);
+	va_end (ap);
+	return p;
+}
 
-	size_t vlen = strlen (value);
-	char *a = file == NULL && vlen > 0 && value[vlen - 1] != '/'
-		? xstrcat3 (value, "/", "") : xstrdup (value);
-
-	char *ea = expand_path (a);
-	free (a);
-	if (ea != NULL) {
-		va_list ap;
-		va_start (ap, file);
-		char *buf = xvasprintf (fmt, ap);
-		va_end (ap);
-
-		a = compact_path (ea);
-		free (ea);
-
-		Completion *cp = completion_new (true);
-		long pos = (long) strlen (a);
-		if (file != NULL)
-			pos -= (long) strlen (file);
-		if (pos < 0)
-			pos = 0;
-		p = term_minibuf_read (buf, a, pos, cp, files_history);
-		completion_free (cp);
-		free (buf);
-		free (a);
-
-		if (p != NULL) {
-			char *ep = expand_path (p);
-			free (p);
-			p = ep;
-			if (p != NULL)
-				history_add_element (files_history, p);
-		}
-	}
-
+/*
+ * Read the name of a file to visit, preselecting matches.
+ */
+char *
+minibuf_read_file_to_visit (const char *fmt, const char *value, const char *file, ...)
+{
+	va_list ap;
+	va_start (ap, file);
+	char *p = vread_filename (true, fmt, value, file, ap);
+	va_end (ap);
 	return p;
 }
 
@@ -258,11 +266,12 @@ minibuf_read_y_or_n (const char *fmt, ...)
 char *
 minibuf_read_completion (const char *fmt, const char *val, Completion *cp, History *hp, ...)
 {
+	(void) val;
 	va_list ap;
 	va_start (ap, hp);
 	char *prompt = xvasprintf (fmt, ap);
 	va_end (ap);
-	char *s = term_minibuf_read (prompt, val, LONG_MAX, cp, hp);
+	char *s = picker_read_name (prompt, &cp->completions, NULL, hp, false, -1);
 	free (prompt);
 	return s;
 }
@@ -342,9 +351,17 @@ minibuf_clear (void)
 	term_minibuf_write ("");
 }
 
+void
+minibuf_set_reserved_height (size_t h)
+{
+	reserved_height = h;
+}
+
 size_t
 minibuf_get_height (void)
 {
+	if (reserved_height > 0)
+		return reserved_height;
 	size_t h = 1;
 	if (contents != NULL) {
 		size_t len = strlen (contents);

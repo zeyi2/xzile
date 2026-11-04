@@ -49,8 +49,10 @@ long last_uniarg = 1;
 void
 zile_exit (int reason)
 {
-	if (reason == EXIT_SUCCESS)
+	if (reason == EXIT_SUCCESS) {
+		recentf_save ();
 		term_finish ();
+	}
 	else {
 		term_close ();
 		fprintf (stderr, "Trying to save modified buffers (if any)...\n");
@@ -357,6 +359,7 @@ main (int argc, char **argv)
 	terminal_init ();
 	compile_init ();
 	magit_init ();
+	selectors_init ();
 	eval_init ();
 	file_init ();
 	funcs_init ();
@@ -402,6 +405,7 @@ main (int argc, char **argv)
 		lisp_loadfile (init_file);
 		free (init_file);
 		free (home);
+		recentf_load ();
 	}
 
 	/* Create the splash buffer & message only if no files, function or

@@ -1199,47 +1199,6 @@ buffer_make_completion (void)
 }
 
 static bool
-F_kill_buffer (long uniarg, Args *args)
-{
-	(void) uniarg;
-	bool ok = true;
-
-	char *buf = xstrdup_or_null (args_poll (args));
-	if (buf == NULL) {
-		Completion *cp = make_buffer_completion ();
-		buf = minibuf_read_completion ("Kill buffer (default %s): ",
-					       "", cp, NULL, cur_bp->name);
-		completion_free (cp);
-		if (buf == NULL)
-			ok = funcall ("keyboard-quit");
-	}
-
-	Buffer *bp = NULL;
-	if (buf != NULL && buf[0] != '\0') {
-		bp = buffer_find (buf);
-		if (bp == NULL) {
-			minibuf_error ("Buffer `%s' not found", buf);
-			ok = false;
-		}
-	} else
-		bp = cur_bp;
-	free (buf);
-
-	if (ok) {
-		if (!buffer_check_modified (bp))
-			ok = false;
-		else if ((shell_process_alive (bp) || compilation_process_alive (bp)) &&
-			 minibuf_read_yesno ("Buffer %s has a running process; kill it? (yes or no) ",
-					     bp->name) != 1)
-			ok = false;
-		else
-			buffer_kill (bp);
-	}
-
-	return ok;
-}
-
-static bool
 F_next_buffer (long uniarg, Args *args)
 {
 	(void) uniarg;
@@ -1283,10 +1242,6 @@ F_previous_buffer (long uniarg, Args *args)
 void
 buffer_init_lisp (void)
 {
-	lisp_func_new ("kill-buffer", F_kill_buffer, true,
-		       "Kill buffer BUFFER.\n"
-		       "With a nil argument, kill the current buffer.");
-
 	lisp_func_new ("next-buffer", F_next_buffer, true,
 		       "Switch to the next buffer in the buffer list.");
 
