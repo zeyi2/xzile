@@ -139,6 +139,166 @@ check_writable (const char *filename)
 	return faccessat (AT_FDCWD, filename, W_OK, AT_EACCESS) == 0;
 }
 
+#ifdef __APPLE__
+#define ST_MTIM(st) ((st).st_mtimespec)
+#else
+#define ST_MTIM(st) ((st).st_mtim)
+#endif
+
+static FileStamp
+file_stamp (const char *filename)
+{
+	FileStamp fs = { 0 };
+	struct stat st;
+	if (filename != NULL && stat (filename, &st) == 0) {
+		fs.known = true;
+		fs.mtime = ST_MTIM (st);
+		fs.size = st.st_size;
+		fs.dev = st.st_dev;
+		fs.ino = st.st_ino;
+	}
+	return fs;
+}
+
+/* Record the visited file as matching the buffer. */
+void
+buffer_note_disk (Buffer *bp)
+{
+	bp->disk = file_stamp (bp->filename);
+	bp->disk_warned = false;
+}
+
+/* Whether the visited file looks different from when it was last read
+   or written. A file that has gone away does not count. */
+static bool
+buffer_disk_changed (Buffer *bp)
+{
+	if (bp->filename == NULL || bp->needname || !bp->disk.known)
+		return false;
+	FileStamp now = file_stamp (bp->filename);
+	return now.known &&
+		(now.mtime.tv_sec != bp->disk.mtime.tv_sec || now.mtime.tv_nsec != bp->disk.mtime.tv_nsec ||
+		 now.size != bp->disk.size || now.ino != bp->disk.ino || now.dev != bp->disk.dev);
+}
+
+static char
+buffer_byte (EstrView pre, EstrView post, size_t i)
+{
+	return i < pre.len ? pre.text[i] : post.text[i - pre.len];
+}
+
+/* Read the visited file and find the part of it that differs from the
+   buffer: everything but the first `*prefix' and last `*suffix' bytes.
+   Returns NULL if the file cannot be read. */
+static Estr *
+read_disk_diff (Buffer *bp, size_t *prefix, size_t *suffix)
+{
+	Estr *es = estr_from_file (bp->filename);
+	if (es == NULL)
+		return NULL;
+	EstrView nv = estr_view (es);
+	EstrView pre = buffer_pre_point (bp), post = buffer_post_point (bp);
+	size_t len = pre.len + post.len, p = 0, s = 0;
+	if (strcmp (nv.eol, buffer_eol (bp)) == 0) {
+		size_t n = MIN (len, nv.len);
+		while (p < n && buffer_byte (pre, post, p) == nv.text[p])
+			p++;
+		while (s < n - p && buffer_byte (pre, post, len - 1 - s) == nv.text[nv.len - 1 - s])
+			s++;
+	}
+	*prefix = p;
+	*suffix = s;
+	return es;
+}
+
+static bool
+buffer_matches_disk (Buffer *bp)
+{
+	size_t p, s;
+	Estr *es = read_disk_diff (bp, &p, &s);
+	if (es == NULL)
+		return false;
+	bool same = p == buffer_length (bp) && p == estr_view (es).len;
+	estr_free (es);
+	return same;
+}
+
+/* Replace the buffer text with the visited file, changing only the
+   part that differs so that point, the mark and other windows stay
+   where they were. */
+static bool
+revert_from_disk (Buffer *bp)
+{
+	size_t p, s;
+	Estr *es = read_disk_diff (bp, &p, &s);
+	if (es == NULL)
+		return false;
+	EstrView nv = estr_view (es);
+	size_t len = buffer_length (bp);
+	if (p < len || p < nv.len) {
+		Marker *pt = xzalloc (sizeof (Marker));
+		marker_move (pt, bp, buffer_pt (bp));
+		bool readonly = bp->readonly, noundo = bp->noundo;
+		bp->readonly = false;
+		bp->noundo = true;
+		buffer_goto_offset (bp, p);
+		buffer_replace_estr (bp, len - p - s, ev_substring (nv, p, nv.len - p - s));
+		buffer_goto_offset (bp, MIN (pt->o, buffer_length (bp)));
+		marker_free (pt);
+		bp->readonly = readonly;
+		bp->noundo = noundo;
+		undo_free_all (bp);
+		thisflag |= FLAG_NEED_RESYNC;
+	}
+	estr_free (es);
+	bp->modified = false;
+	buffer_note_disk (bp);
+	return true;
+}
+
+/* Bring buffers in line with files changed on disk: revert unmodified
+   buffers and warn about modified ones. Checks the current buffer, and
+   the others too if `all' or a second has passed since they were last
+   checked. Returns true if anything was reverted or reported. */
+bool
+buffers_check_disk (bool all)
+{
+	static int64_t last_all;
+	if (!get_variable_bool ("global-auto-revert-mode"))
+		return false;
+	int64_t now = monotonic_ms ();
+	if (now - last_all >= 1000)
+		all = true;
+	if (all)
+		last_all = now;
+
+	size_t reverted = 0;
+	Buffer *last = NULL, *warned = NULL;
+	for (Buffer *bp = all ? head_bp : cur_bp; bp != NULL; bp = all ? bp->next : NULL) {
+		if (!buffer_disk_changed (bp))
+			continue;
+		if (!bp->modified) {
+			if (revert_from_disk (bp)) {
+				reverted++;
+				last = bp;
+			}
+		} else if (buffer_matches_disk (bp)) {
+			buffer_note_disk (bp);
+		} else if (!bp->disk_warned) {
+			bp->disk_warned = true;
+			warned = bp;
+		}
+	}
+
+	if (warned != NULL)
+		minibuf_error ("%s changed on disk, but the buffer has unsaved changes", warned->name);
+	else if (reverted == 1)
+		minibuf_write ("Reverted buffer `%s' from changed file", last->name);
+	else if (reverted > 1)
+		minibuf_write ("Reverted %zu buffers from changed files", reverted);
+	return warned != NULL || reverted > 0;
+}
+
 bool
 find_file (const char *filename)
 {
@@ -168,6 +328,7 @@ find_file (const char *filename)
 		/* Reset undo history. */
 		undo_free_all (bp);
 		bp->modified = false;
+		buffer_note_disk (bp);
 	}
 
 	buffer_switch_to (bp, true);
@@ -421,6 +582,18 @@ write_buffer (Buffer *bp, bool needname, bool confirm, const char *name0, const 
 			ok = false;
 	}
 
+	if (ans == 1 && bp->filename != NULL && strcmp (name, bp->filename) == 0 &&
+	    buffer_disk_changed (bp) && !buffer_matches_disk (bp)) {
+		ans = minibuf_read_yesno ("%s has changed since visited or saved.  Save anyway? (yes or no) ",
+					  bp->name);
+		if (ans < 0)
+			funcall ("keyboard-quit");
+		else if (ans == 0)
+			minibuf_error ("Save not confirmed");
+		if (ans != 1)
+			ok = false;
+	}
+
 	if (ans == 1) {
 		if (bp->filename == NULL || strcmp (name, bp->filename) != 0)
 			buffer_set_names (bp, name);
@@ -431,6 +604,7 @@ write_buffer (Buffer *bp, bool needname, bool confirm, const char *name0, const 
 			ensure_buffer_final_eol (bp);
 			minibuf_write ("Wrote %s", name);
 			bp->modified = false;
+			buffer_note_disk (bp);
 			undo_set_unchanged (bp->last_undop);
 		} else
 			ok = false;
@@ -676,28 +850,12 @@ F_revert_buffer (long uniarg, Args *args)
 	} else if (ans == 0)
 		return false;
 
-	Estr *es = estr_from_file (cur_bp->filename);
-	if (es == NULL) {
+	if (!revert_from_disk (cur_bp)) {
 		minibuf_error ("%s: %s", cur_bp->filename, strerror (errno));
 		return false;
 	}
-
-	size_t old_pt = buffer_pt (cur_bp);
-	bool old_noundo = cur_bp->noundo;
-
-	cur_bp->noundo = true;
-	cur_bp->readonly = false;
-	buffer_goto_offset (cur_bp, 0);
-	buffer_replace_estr (cur_bp, buffer_length (cur_bp), estr_view (es));
-	estr_free (es);
-	buffer_goto_offset (cur_bp, MIN (old_pt, buffer_length (cur_bp)));
-	cur_bp->noundo = old_noundo;
-	cur_bp->readonly = !check_writable (cur_bp->filename);
-
-	cur_bp->modified = false;
 	undo_free_all (cur_bp);
-	thisflag |= FLAG_NEED_RESYNC;
-
+	cur_bp->readonly = !check_writable (cur_bp->filename);
 	return true;
 }
 

@@ -1561,6 +1561,8 @@ refresh_buffer (Buffer *bp)
 static void
 refresh_status_of (const char *root)
 {
+	/* Git may have rewritten visited files. */
+	buffers_check_disk (true);
 	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
 		if (bp->magit != NULL && bp->magit->kind == MAGIT_STATUS && strcmp (bp->magit->root, root) == 0)
 			refresh_status (bp, false);

@@ -263,6 +263,7 @@ preview_buffer (SwitchState *st, const char *path)
 	free (bp->dir);
 	bp->dir = path_dirname (path);
 	bp->modified = false;
+	buffer_note_disk (bp);
 	/* Keep it at the end of the buffer list while previewing. */
 	buffer_set_temporary (bp);
 	bp->temporary = false;

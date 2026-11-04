@@ -40,6 +40,7 @@
 #include <string.h>
 #include <limits.h>
 #include <sys/types.h>
+#include <time.h>
 
 #ifndef PACKAGE
 #define PACKAGE "xzile"
@@ -315,6 +316,7 @@ typedef struct {
 void term_init (void);
 void term_close (void);
 bool term_initialized (void);
+bool term_input_eof (void);
 size_t term_buf_len (void);
 void term_move (size_t y, size_t x);
 void term_clrtoeol (void);
@@ -539,9 +541,20 @@ typedef struct Undo {
 	size_t size;		/* Size of replacement text. */
 } Undo;
 
+/* What the visited file looked like when last read or written. */
+typedef struct {
+	bool known;
+	struct timespec mtime;
+	off_t size;
+	dev_t dev;
+	ino_t ino;
+} FileStamp;
+
 struct Buffer {
 	char *name;		/* The name of the buffer. */
 	char *filename;		/* The file being edited. */
+	FileStamp disk;		/* The visited file when last read or written. */
+	bool disk_warned;	/* The user was told the file changed on disk. */
 	Buffer *next;		/* Next buffer in buffer list. */
 	size_t goalc;		/* Goal column for previous/next-line commands. */
 	Marker *mark;		/* The mark. */
@@ -955,6 +968,8 @@ void killring_init (void);
 char *expand_path (const char *path);
 char *compact_path (const char *path);
 bool find_file (const char *filename);
+void buffer_note_disk (Buffer *bp);
+bool buffers_check_disk (bool all);
 int write_to_disk (Buffer *bp, const char *filename, mode_t mode);
 bool file_copy (const char *from, const char *to);
 void file_init (void);

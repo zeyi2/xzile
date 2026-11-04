@@ -220,10 +220,15 @@ get_key_sequence (KeyVec *keys)
 	keys->v = NULL;
 	keys->n = keys->cap = 0;
 
+	/* Follow files changed on disk while waiting for a command. */
 	Keystroke key;
-	do
-		key = getkey (GETKEY_DEFAULT);
-	while (key == KBD_NOKEY);
+	for (bool all = false;; all = true) {
+		if (buffers_check_disk (all) && (thisflag & FLAG_NEED_RESYNC))
+			window_resync (cur_wp);
+		key = getkey (term_input_eof () ? GETKEY_DEFAULT : 1000);
+		if (key != KBD_NOKEY)
+			break;
+	}
 	kv_push (keys, key);
 	LispFunc *f;
 	while (lookup_keys (keys, &f) == LOOKUP_PREFIX) {

@@ -35,5 +35,6 @@ X ("ring-bell", "t", false, "Non-nil means ring the terminal bell on any error."
 X ("highlight-nonselected-windows", "nil", false, "If non-nil, highlight region even in nonselected windows.")
 X ("line-number-mode", "nil", true, "If non-nil, display line numbers in the left margin.")
 X ("relative-line-number-mode", "nil", true, "If non-nil, display relative line numbers (distance from current line).")
+X ("global-auto-revert-mode", "t", false, "Non-nil means buffers follow their files when these change on disk.\nA buffer without unsaved changes is reverted; a buffer with unsaved\nchanges is left alone, with a warning.  Saving a buffer whose file has\nchanged asks for confirmation regardless.")
 X ("make-backup-files", "t", false, "Non-nil means make a backup of a file the first time it is saved.\nThis is done by appending `~' to the file name.")
 X ("backup-directory", "nil", false, "The directory for backup files, which must exist.\nIf this variable is nil, the backup is made in the original file's\ndirectory.\nThis value is used only when `make-backup-files' is t.")

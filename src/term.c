@@ -124,6 +124,12 @@ static volatile sig_atomic_t cont_pending = 0;
 static volatile sig_atomic_t chld_pending = 0;
 static bool input_eof = false;
 
+bool
+term_input_eof (void)
+{
+	return input_eof;
+}
+
 /* Pushed-back key codes (a stack: the last element is read first). */
 static unsigned *key_buf = NULL;
 static size_t key_buf_n = 0, key_buf_cap = 0;
