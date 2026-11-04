@@ -1,13 +1,4 @@
-*.c
-.dirstamp
-estr.vapi
-estr.h
-estr-test
-estr-test.log
-estr-test.trs
-zile
-dummy.vala
-tbl_bindings.vala
-mkvars.stamp
-core
-gmon.out
+/xzile
+/estr-test
+/mkdotzile
+/dotzile.sample

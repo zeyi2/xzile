@@ -2,6 +2,48 @@ GNU Zile NEWS                                         -*- outline -*-
 
 * Noteworthy changes in release ?.? (????-??-??) [?]
 
+** Miscellaneous
+
+  XZile has been rewritten in C. The only dependency is the C library:
+  terminal handling uses termios and ANSI escape sequences instead of
+  curses, regular expressions use a built-in Emacs-syntax engine, and
+  the build is a plain Makefile.
+
+** Bug fixes
+
+  Backups are made the first time a file is saved (they never were).
+
+  query-replace no longer changes the case of the replacement text for
+  all later matches after a case-preserving replacement.
+
+  capitalize-word lowercases the rest of the word.
+
+  upcase-region and downcase-region no longer corrupt UTF-8 text.
+
+  Writing the same message to the minibuffer twice displays it.
+
+  Keyboard macros no longer record the key that ends them, and keep
+  non-ASCII keys.
+
+  The F10-F12 keys can be named in key strings.
+
+  delete-other-windows keeps the selected window.
+
+  cd reports failure and changes the buffer's default directory.
+
+  Paths with `.' and `..' after the first component are normalized.
+
+  Duplicate buffer names are numbered name<2>, name<3>, ... rather than
+  accumulating suffixes.
+
+  The mode line shows each window's own line-ending type.
+
+  Horizontally scrolled lines containing tabs or UTF-8 display
+  correctly, and control characters no longer misplace the cursor.
+
+  describe-key on an unbound key, and various commands given a prefix
+  argument, no longer crash.
+
 
 * Noteworthy changes in release 2.7.0 (2026-03-06) [beta]
 

@@ -1,2 +1,0 @@
-# glibc
-leak:g_get_current_dir

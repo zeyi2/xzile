@@ -15,24 +15,22 @@ The file **README** in this directory contains the original GNU Zile readme.
 
 ## Build and install
 
-Same as GNU Zile. From a release tarball:
+XZile is written in C99 against POSIX.1-2008, and its only dependency is the
+C library: it needs no curses, GLib or other libraries, and no configure step.
+It builds on macOS and Linux with any C compiler and POSIX `make`:
 
 ```bash
-./configure
 make
+make check
 make install
 ```
 
-From a git checkout:
+`make install` honours the usual `prefix` and `DESTDIR` variables, e.g.
+`make prefix=$HOME/.local install`; `CC` and `CFLAGS` can be overridden
+the same way.
 
-```bash
-./bootstrap
-./configure
-make
-make install
-```
-
-You need **valac** 0.56 or later, **glib 2.0**, and **libgee**. The installed binary is **xzile**, and the user init file is **~/.xzile** (see `doc/man-extras` or `man xzile` for details).
+The installed binary is **xzile**, and the user init file is **~/.xzile**
+(see `man xzile` and the installed `dotzile.sample` for details).
 
 ---
 

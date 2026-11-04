@@ -1,0 +1,1227 @@
+/* Terminal handling using termios and ANSI escape sequences
+
+   Copyright (c) 1997-2021 Free Software Foundation, Inc.
+   Copyright (c) 2025-2026 Zeyi2 <zeyi2@nekoarch.cc>
+
+   This file is part of XZile.
+
+   XZile is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 3, or (at your option)
+   any later version.
+
+   XZile is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, see <https://www.gnu.org/licenses/>.  */
+
+#include "xzile.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+#include <wchar.h>
+#include <sys/ioctl.h>
+
+#define TERM_IN 0
+#define TERM_OUT 1
+
+/* Time to wait for the rest of an escape sequence, in ms. */
+#define ESCAPE_DELAY 100
+
+/*--------------------------------------------------------------------------
+ * Raw input codes.
+ *
+ * Codes up to 0xff are bytes read from the terminal; decoded escape
+ * sequences produce the codes below, possibly with modifier bits.
+ *--------------------------------------------------------------------------*/
+
+enum {
+	CODE_UP = 0x10000,
+	CODE_DOWN,
+	CODE_LEFT,
+	CODE_RIGHT,
+	CODE_HOME,
+	CODE_END,
+	CODE_PPAGE,
+	CODE_NPAGE,
+	CODE_IC,
+	CODE_DC,
+	CODE_F1,
+	CODE_F2,
+	CODE_F3,
+	CODE_F4,
+	CODE_F5,
+	CODE_F6,
+	CODE_F7,
+	CODE_F8,
+	CODE_F9,
+	CODE_F10,
+	CODE_F11,
+	CODE_F12,
+	CODE_PASTE,		/* Start of a bracketed paste. */
+	CODE_IGNORE,		/* An unrecognised escape sequence. */
+	CODE_RESIZE,		/* The terminal was resized. */
+};
+
+#define CODE_MOD_CTRL 0x100000u
+#define CODE_MOD_META 0x200000u
+#define CODE_MODS (CODE_MOD_CTRL | CODE_MOD_META)
+
+#define CODE_NONE UINT_MAX
+
+static const char BRACKETED_PASTE_ENABLE[] = "\033[?2004h";
+static const char BRACKETED_PASTE_DISABLE[] = "\033[?2004l";
+static const char BRACKETED_PASTE_END[] = "\033[201~";
+
+
+/*--------------------------------------------------------------------------
+ * Screen state.
+ *--------------------------------------------------------------------------*/
+
+enum {
+	ATTR_BOLD = 1,
+	ATTR_UNDERLINE = 2,
+	ATTR_REVERSE = 4,
+};
+
+typedef struct {
+	int fg, bg;		/* Colour numbers, or TERM_COLOR_DEFAULT. */
+	unsigned flags;
+} Attr;
+
+typedef struct {
+	char ch[16];		/* UTF-8 bytes; empty for the right half of a wide char. */
+	Attr attr;
+} Cell;
+
+static bool initialized = false;
+static bool tty_in = false;
+static struct termios orig_termios;
+static size_t rows = 24, cols = 80;
+static Cell *screen = NULL;	/* What we want displayed. */
+static Cell *phys = NULL;	/* What we believe is displayed. */
+static bool phys_valid = false;
+static size_t cur_y = 0, cur_x = 0;
+static Attr cur_attr = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
+static TerminalCapabilities capabilities;
+
+static int signal_pipe[2] = { -1, -1 };
+static volatile sig_atomic_t winch_pending = 0;
+static volatile sig_atomic_t cont_pending = 0;
+
+/* Pushed-back key codes (a stack: the last element is read first). */
+static unsigned *key_buf = NULL;
+static size_t key_buf_n = 0, key_buf_cap = 0;
+
+/* Bytes read from the terminal but not yet consumed. */
+static unsigned char inq[64];
+static size_t inq_n = 0;
+
+static char *pending_paste_text = NULL;
+
+
+/*--------------------------------------------------------------------------
+ * Low-level output.
+ *--------------------------------------------------------------------------*/
+
+static void
+write_all_fd (int fd, const char *s, size_t len)
+{
+	while (len > 0) {
+		ssize_t n = write (fd, s, len);
+		if (n < 0) {
+			if (errno == EINTR || errno == EAGAIN)
+				continue;
+			return;
+		}
+		s += n;
+		len -= (size_t) n;
+	}
+}
+
+static void
+out_str (const char *s)
+{
+	write_all_fd (TERM_OUT, s, strlen (s));
+}
+
+static void
+enter_screen_mode (void)
+{
+	/* Alternate screen, application cursor keys, bracketed paste. */
+	out_str ("\033[?1049h\033[?1h\033=");
+	out_str (BRACKETED_PASTE_ENABLE);
+}
+
+static void
+leave_screen_mode (void)
+{
+	out_str ("\033[0m");
+	out_str (BRACKETED_PASTE_DISABLE);
+	out_str ("\033[?1l\033>\033[?25h\033[?1049l");
+}
+
+static void
+set_raw_mode (void)
+{
+	if (!tty_in)
+		return;
+	struct termios raw = orig_termios;
+	raw.c_iflag &= ~(tcflag_t) (BRKINT | ICRNL | INLCR | IGNCR | INPCK | ISTRIP | IXON);
+	raw.c_oflag &= ~(tcflag_t) OPOST;
+	raw.c_cflag |= CS8;
+	raw.c_lflag &= ~(tcflag_t) (ECHO | ICANON | IEXTEN | ISIG);
+	raw.c_cc[VMIN] = 1;
+	raw.c_cc[VTIME] = 0;
+	tcsetattr (TERM_IN, TCSAFLUSH, &raw);
+}
+
+static void
+restore_mode (void)
+{
+	if (tty_in)
+		tcsetattr (TERM_IN, TCSAFLUSH, &orig_termios);
+}
+
+
+/*--------------------------------------------------------------------------
+ * Signals.
+ *--------------------------------------------------------------------------*/
+
+static void
+wake_input (void)
+{
+	if (signal_pipe[1] >= 0) {
+		int saved = errno;
+		char c = 0;
+		if (write (signal_pipe[1], &c, 1) < 0) { /* Ignore error. */ }
+		errno = saved;
+	}
+}
+
+static void
+winch_handler (int signo)
+{
+	(void) signo;
+	winch_pending = 1;
+	wake_input ();
+}
+
+static void tstp_handler (int signo);
+
+static void
+install_tstp_handler (void)
+{
+	struct sigaction sa;
+	memset (&sa, 0, sizeof sa);
+	sa.sa_handler = tstp_handler;
+	sigemptyset (&sa.sa_mask);
+	sigaction (SIGTSTP, &sa, NULL);
+}
+
+static void
+tstp_handler (int signo)
+{
+	(void) signo;
+	int saved = errno;
+
+	leave_screen_mode ();
+	restore_mode ();
+
+	/* Stop for real, then carry on from here when continued. */
+	signal (SIGTSTP, SIG_DFL);
+	sigset_t mask;
+	sigemptyset (&mask);
+	sigaddset (&mask, SIGTSTP);
+	sigprocmask (SIG_UNBLOCK, &mask, NULL);
+	kill (getpid (), SIGTSTP);
+
+	install_tstp_handler ();
+	set_raw_mode ();
+	enter_screen_mode ();
+	cont_pending = 1;
+	wake_input ();
+	errno = saved;
+}
+
+
+/*--------------------------------------------------------------------------
+ * Screen buffers.
+ *--------------------------------------------------------------------------*/
+
+static void
+blank_cell (Cell *c)
+{
+	c->ch[0] = ' ';
+	c->ch[1] = '\0';
+	c->attr.fg = c->attr.bg = TERM_COLOR_DEFAULT;
+	c->attr.flags = 0;
+}
+
+static void
+query_size (void)
+{
+	size_t r = 0, c = 0;
+	long n;
+	const char *s;
+
+	if ((s = getenv ("LINES")) != NULL && parse_long (s, &n) && n > 0)
+		r = (size_t) n;
+	if ((s = getenv ("COLUMNS")) != NULL && parse_long (s, &n) && n > 0)
+		c = (size_t) n;
+
+	struct winsize ws;
+	if ((r == 0 || c == 0) &&
+	    (ioctl (TERM_OUT, TIOCGWINSZ, &ws) == 0 || ioctl (TERM_IN, TIOCGWINSZ, &ws) == 0)) {
+		if (r == 0)
+			r = ws.ws_row;
+		if (c == 0)
+			c = ws.ws_col;
+	}
+
+	rows = r > 0 ? r : 24;
+	cols = c > 0 ? c : 80;
+	if (rows < 3)
+		rows = 3;
+	if (cols < 10)
+		cols = 10;
+}
+
+static void
+alloc_screens (void)
+{
+	free (screen);
+	free (phys);
+	screen = xmalloc (rows * cols * sizeof (Cell));
+	phys = xmalloc (rows * cols * sizeof (Cell));
+	for (size_t i = 0; i < rows * cols; i++)
+		blank_cell (&screen[i]);
+	phys_valid = false;
+	cur_y = MIN (cur_y, rows - 1);
+	cur_x = MIN (cur_x, cols - 1);
+}
+
+static void
+detect_capabilities (void)
+{
+	const char *term = getenv ("TERM");
+	const char *colorterm = getenv ("COLORTERM");
+
+	capabilities.supports_reverse = true;
+	capabilities.supports_underline = true;
+	capabilities.has_colors = false;
+	capabilities.supports_default_colors = false;
+	capabilities.color_count = 0;
+
+	if (term == NULL || *term == '\0' || strcmp (term, "dumb") == 0 ||
+	    str_has_prefix (term, "vt") || strstr (term, "-mono") != NULL ||
+	    str_has_suffix (term, "-m"))
+		return;
+
+	capabilities.has_colors = true;
+	capabilities.supports_default_colors = true;
+	if (strstr (term, "256color") != NULL || strstr (term, "truecolor") != NULL ||
+	    (colorterm != NULL && *colorterm != '\0'))
+		capabilities.color_count = 256;
+	else if (strstr (term, "16color") != NULL)
+		capabilities.color_count = 16;
+	else
+		capabilities.color_count = 8;
+}
+
+void
+term_init (void)
+{
+	tty_in = isatty (TERM_IN) && tcgetattr (TERM_IN, &orig_termios) == 0;
+
+	if (pipe (signal_pipe) == 0) {
+		for (int i = 0; i < 2; i++) {
+			fcntl (signal_pipe[i], F_SETFL, fcntl (signal_pipe[i], F_GETFL) | O_NONBLOCK);
+			fcntl (signal_pipe[i], F_SETFD, FD_CLOEXEC);
+		}
+	} else
+		signal_pipe[0] = signal_pipe[1] = -1;
+
+	struct sigaction sa;
+	memset (&sa, 0, sizeof sa);
+	sa.sa_handler = winch_handler;
+	sigemptyset (&sa.sa_mask);
+	sigaction (SIGWINCH, &sa, NULL);
+	install_tstp_handler ();
+
+	query_size ();
+	alloc_screens ();
+	detect_capabilities ();
+
+	set_raw_mode ();
+	enter_screen_mode ();
+	initialized = true;
+}
+
+void
+term_close (void)
+{
+	if (!initialized)
+		return;
+	initialized = false;
+	signal (SIGTSTP, SIG_DFL);
+	signal (SIGWINCH, SIG_DFL);
+	leave_screen_mode ();
+	restore_mode ();
+}
+
+bool
+term_initialized (void)
+{
+	return initialized;
+}
+
+size_t
+term_width (void)
+{
+	return cols;
+}
+
+size_t
+term_height (void)
+{
+	return rows;
+}
+
+const TerminalCapabilities *
+term_get_capabilities (void)
+{
+	return &capabilities;
+}
+
+
+/*--------------------------------------------------------------------------
+ * Drawing into the virtual screen.
+ *--------------------------------------------------------------------------*/
+
+void
+term_move (size_t y, size_t x)
+{
+	cur_y = MIN (y, rows - 1);
+	cur_x = MIN (x, cols - 1);
+}
+
+static void
+put_cell (const char *bytes, size_t n, size_t width)
+{
+	if (width == 2 && cur_x + 1 >= cols) {
+		/* A wide character does not fit: pad the line instead. */
+		put_cell (" ", 1, 1);
+		return;
+	}
+
+	Cell *c = &screen[cur_y * cols + cur_x];
+	n = MIN (n, sizeof c->ch - 1);
+	memcpy (c->ch, bytes, n);
+	c->ch[n] = '\0';
+	c->attr = cur_attr;
+	if (width == 2) {
+		Cell *c2 = c + 1;
+		c2->ch[0] = '\0';
+		c2->attr = cur_attr;
+	}
+
+	cur_x += width;
+	if (cur_x >= cols) {
+		if (cur_y + 1 < rows) {
+			cur_x = 0;
+			cur_y++;
+		} else
+			cur_x = cols - 1;
+	}
+}
+
+/* Append a zero-width character to the previous cell. */
+static void
+put_combining (const char *bytes, size_t n)
+{
+	if (cur_x == 0)
+		return;
+	Cell *c = &screen[cur_y * cols + cur_x - 1];
+	if (c->ch[0] == '\0' && cur_x >= 2)
+		c--;
+	size_t len = strlen (c->ch);
+	if (len + n < sizeof c->ch) {
+		memcpy (c->ch + len, bytes, n);
+		c->ch[len + n] = '\0';
+	}
+}
+
+void
+term_clrtoeol (void)
+{
+	Attr saved = cur_attr;
+	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
+	cur_attr.flags = 0;
+	for (size_t x = cur_x; x < cols; x++) {
+		Cell *c = &screen[cur_y * cols + x];
+		c->ch[0] = ' ';
+		c->ch[1] = '\0';
+		c->attr = cur_attr;
+	}
+	cur_attr = saved;
+}
+
+void
+term_addnstr (const char *s, size_t len)
+{
+	for (size_t i = 0; i < len;) {
+		unsigned char b = (unsigned char) s[i];
+		if (b == '\n') {
+			term_clrtoeol ();
+			if (cur_y + 1 < rows) {
+				cur_y++;
+				cur_x = 0;
+			}
+			i++;
+		} else if (b == '\t') {
+			do
+				put_cell (" ", 1, 1);
+			while (cur_x % 8 != 0 && cur_x != 0);
+			i++;
+		} else if (b < 0x20 || b == 0x7f) {
+			char buf[2] = { '^', (char) (b == 0x7f ? '?' : b + '@') };
+			put_cell (buf, 1, 1);
+			put_cell (buf + 1, 1, 1);
+			i++;
+		} else if (b < 0x80) {
+			put_cell ((const char *) &s[i], 1, 1);
+			i++;
+		} else {
+			size_t char_len;
+			uint32_t cp = utf8_decode (s, len, i, &char_len);
+			if (cp == UTF8_REPLACEMENT && char_len == 1) {
+				put_cell ("?", 1, 1);
+			} else if (cp < 0xA0) {
+				char buf[8];
+				int n = snprintf (buf, sizeof buf, "\\%o", (unsigned) cp);
+				for (int k = 0; k < n; k++)
+					put_cell (buf + k, 1, 1);
+			} else {
+				int w = wcwidth ((wchar_t) cp);
+				if (w < 0)
+					w = 1;
+				if (w == 0)
+					put_combining (s + i, char_len);
+				else
+					put_cell (s + i, char_len, (size_t) (w > 1 ? 2 : 1));
+			}
+			i += char_len;
+		}
+	}
+}
+
+void
+term_addstr (const char *s)
+{
+	term_addnstr (s, strlen (s));
+}
+
+void
+term_addch (char c)
+{
+	term_addnstr (&c, 1);
+}
+
+void
+term_clear (void)
+{
+	for (size_t i = 0; i < rows * cols; i++)
+		blank_cell (&screen[i]);
+	phys_valid = false;
+}
+
+void
+term_attrset (size_t attr)
+{
+	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
+	cur_attr.flags = 0;
+	if (attr & FONT_REVERSE)
+		cur_attr.flags |= ATTR_REVERSE;
+	if (attr & FONT_UNDERLINE)
+		cur_attr.flags |= ATTR_UNDERLINE;
+}
+
+void
+term_apply_style (const TerminalStyle *style)
+{
+	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
+	cur_attr.flags = 0;
+
+	if (style->bold)
+		cur_attr.flags |= ATTR_BOLD;
+	if (style->underline)
+		cur_attr.flags |= ATTR_UNDERLINE;
+	if (style->reverse)
+		cur_attr.flags |= ATTR_REVERSE;
+
+	if (!capabilities.has_colors || (!style->has_foreground && !style->has_background))
+		return;
+
+	int fg = style->has_foreground ? style->foreground : TERM_COLOR_DEFAULT;
+	int bg = style->has_background ? style->background : TERM_COLOR_DEFAULT;
+	if (!capabilities.supports_default_colors) {
+		/* Use the concrete fallbacks precomputed by the resolver. */
+		if (fg == TERM_COLOR_DEFAULT)
+			fg = style->default_foreground_fallback;
+		if (bg == TERM_COLOR_DEFAULT)
+			bg = style->default_background_fallback;
+	}
+	cur_attr.fg = fg < 0 ? TERM_COLOR_DEFAULT : fg;
+	cur_attr.bg = bg < 0 ? TERM_COLOR_DEFAULT : bg;
+}
+
+void
+term_apply_face (const char *face_name)
+{
+	TerminalStyle style;
+	if (resolve_terminal_style (face_name, &style))
+		term_apply_style (&style);
+	else
+		term_attrset (FONT_NORMAL);
+}
+
+void
+term_beep (void)
+{
+	if (initialized)
+		out_str ("\a");
+}
+
+
+/*--------------------------------------------------------------------------
+ * Refresh.
+ *--------------------------------------------------------------------------*/
+
+static bool
+attr_eq (Attr a, Attr b)
+{
+	return a.fg == b.fg && a.bg == b.bg && a.flags == b.flags;
+}
+
+static bool
+cell_eq (const Cell *a, const Cell *b)
+{
+	return attr_eq (a->attr, b->attr) && strcmp (a->ch, b->ch) == 0;
+}
+
+static void
+add_color (StrBuf *sb, int color, int base, int bright_base, int ext)
+{
+	if (color < 0)
+		return;
+	if (color < 8)
+		sb_addf (sb, ";%d", base + color);
+	else if (color < 16)
+		sb_addf (sb, ";%d", bright_base + color - 8);
+	else
+		sb_addf (sb, ";%d;5;%d", ext, color);
+}
+
+static void
+add_sgr (StrBuf *sb, Attr a)
+{
+	sb_add (sb, "\033[0");
+	if (a.flags & ATTR_BOLD)
+		sb_add (sb, ";1");
+	if (a.flags & ATTR_UNDERLINE)
+		sb_add (sb, ";4");
+	if (a.flags & ATTR_REVERSE)
+		sb_add (sb, ";7");
+	add_color (sb, a.fg, 30, 90, 38);
+	add_color (sb, a.bg, 40, 100, 48);
+	sb_addc (sb, 'm');
+}
+
+void
+term_refresh (void)
+{
+	if (!initialized)
+		return;
+
+	StrBuf sb;
+	sb_init (&sb);
+	sb_add (&sb, "\033[?25l");
+
+	if (!phys_valid) {
+		sb_add (&sb, "\033[0m\033[H\033[2J");
+		for (size_t i = 0; i < rows * cols; i++)
+			blank_cell (&phys[i]);
+	}
+
+	Attr attr = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
+	bool attr_known = false;
+	size_t py = NOPOS, px = NOPOS;	/* Physical cursor position, if known. */
+
+	for (size_t y = 0; y < rows; y++)
+		for (size_t x = 0; x < cols; x++) {
+			Cell *want = &screen[y * cols + x];
+			Cell *have = &phys[y * cols + x];
+			if (cell_eq (want, have))
+				continue;
+			if (want->ch[0] == '\0') {
+				/* Right half of a wide character drawn by its left half. */
+				*have = *want;
+				continue;
+			}
+			if (py != y || px != x)
+				sb_addf (&sb, "\033[%zu;%zuH", y + 1, x + 1);
+			if (!attr_known || !attr_eq (attr, want->attr)) {
+				add_sgr (&sb, want->attr);
+				attr = want->attr;
+				attr_known = true;
+			}
+			sb_add (&sb, want->ch);
+			*have = *want;
+			bool wide = x + 1 < cols && screen[y * cols + x + 1].ch[0] == '\0';
+			py = y;
+			px = x + (wide ? 2 : 1);
+			if (px >= cols)
+				px = NOPOS;
+		}
+	phys_valid = true;
+
+	sb_add (&sb, "\033[0m");
+	sb_addf (&sb, "\033[%zu;%zuH\033[?25h", cur_y + 1, cur_x + 1);
+	write_all_fd (TERM_OUT, sb.s, sb.len);
+	sb_free (&sb);
+}
+
+
+/*--------------------------------------------------------------------------
+ * Input.
+ *--------------------------------------------------------------------------*/
+
+size_t
+term_buf_len (void)
+{
+	return key_buf_n;
+}
+
+static void
+key_buf_push (unsigned c)
+{
+	if (key_buf_n == key_buf_cap) {
+		key_buf_cap = key_buf_cap ? key_buf_cap * 2 : 32;
+		key_buf = xrealloc (key_buf, key_buf_cap * sizeof (unsigned));
+	}
+	key_buf[key_buf_n++] = c;
+}
+
+static void
+inq_unread (const unsigned char *bytes, size_t n)
+{
+	if (inq_n + n > sizeof inq)
+		n = sizeof inq - inq_n;
+	memmove (inq + n, inq, inq_n);
+	memcpy (inq, bytes, n);
+	inq_n += n;
+}
+
+static void
+handle_signal_wakeup (void)
+{
+	char buf[64];
+	while (signal_pipe[0] >= 0 && read (signal_pipe[0], buf, sizeof buf) > 0)
+		;
+	if (cont_pending) {
+		cont_pending = 0;
+		phys_valid = false;
+		term_refresh ();
+	}
+}
+
+/* Read one byte from the terminal, waiting up to `delay' ms (forever if
+   negative). Returns CODE_NONE on timeout and CODE_RESIZE on resize. */
+static unsigned
+read_byte (int delay)
+{
+	if (inq_n > 0) {
+		unsigned c = inq[0];
+		memmove (inq, inq + 1, --inq_n);
+		return c;
+	}
+
+	int64_t deadline = delay >= 0 ? monotonic_ms () + delay : 0;
+	for (;;) {
+		if (winch_pending) {
+			winch_pending = 0;
+			return CODE_RESIZE;
+		}
+
+		int timeout = -1;
+		if (delay >= 0) {
+			int64_t left = deadline - monotonic_ms ();
+			timeout = left > 0 ? (int) left : 0;
+		}
+
+		struct pollfd fds[2] = {
+			{ TERM_IN, POLLIN, 0 },
+			{ signal_pipe[0], POLLIN, 0 },
+		};
+		int r = poll (fds, signal_pipe[0] >= 0 ? 2 : 1, timeout);
+		if (r < 0) {
+			if (errno == EINTR)
+				continue;
+			return CODE_NONE;
+		}
+		if (r == 0)
+			return CODE_NONE;
+
+		if (signal_pipe[0] >= 0 && (fds[1].revents & POLLIN)) {
+			handle_signal_wakeup ();
+			continue;
+		}
+
+		if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+			unsigned char c;
+			ssize_t n = read (TERM_IN, &c, 1);
+			if (n == 1)
+				return c;
+			if (n < 0 && (errno == EINTR || errno == EAGAIN))
+				continue;
+			/* End of input: give up if we would wait forever. */
+			if (delay < 0) {
+				fprintf (stderr, "%s: end of input\n", program_name);
+				zile_exit (EXIT_SIGNAL);
+			}
+			if (timeout > 0) {
+				/* Avoid spinning on a closed input. */
+				struct timespec ts = { timeout / 1000, (long) (timeout % 1000) * 1000000L };
+				nanosleep (&ts, NULL);
+			}
+			return CODE_NONE;
+		}
+	}
+}
+
+static unsigned
+csi_modifiers (long m)
+{
+	unsigned mods = 0;
+	if (m > 1) {
+		m--;
+		if (m & 2)
+			mods |= CODE_MOD_META;
+		if (m & 4)
+			mods |= CODE_MOD_CTRL;
+		if (m & 8)
+			mods |= CODE_MOD_META;
+	}
+	return mods;
+}
+
+static unsigned
+final_to_code (char final)
+{
+	switch (final) {
+	case 'A': return CODE_UP;
+	case 'B': return CODE_DOWN;
+	case 'C': return CODE_RIGHT;
+	case 'D': return CODE_LEFT;
+	case 'H': return CODE_HOME;
+	case 'F': return CODE_END;
+	case 'P': return CODE_F1;
+	case 'Q': return CODE_F2;
+	case 'R': return CODE_F3;
+	case 'S': return CODE_F4;
+	default: return CODE_NONE;
+	}
+}
+
+static unsigned
+tilde_to_code (long n)
+{
+	switch (n) {
+	case 1: case 7: return CODE_HOME;
+	case 2: return CODE_IC;
+	case 3: return CODE_DC;
+	case 4: case 8: return CODE_END;
+	case 5: return CODE_PPAGE;
+	case 6: return CODE_NPAGE;
+	case 11: return CODE_F1;
+	case 12: return CODE_F2;
+	case 13: return CODE_F3;
+	case 14: return CODE_F4;
+	case 15: return CODE_F5;
+	case 17: return CODE_F6;
+	case 18: return CODE_F7;
+	case 19: return CODE_F8;
+	case 20: return CODE_F9;
+	case 21: return CODE_F10;
+	case 23: return CODE_F11;
+	case 24: return CODE_F12;
+	case 200: return CODE_PASTE;
+	default: return CODE_IGNORE;
+	}
+}
+
+/* Having read ESC from the terminal, try to decode an escape sequence.
+   If the following bytes do not form one, they are pushed back and ESC
+   is returned. */
+static unsigned
+decode_escape (void)
+{
+	unsigned char seq[32];
+	size_t n = 0;
+	unsigned c = read_byte (ESCAPE_DELAY);
+	if (c == CODE_NONE || c == CODE_RESIZE) {
+		if (c == CODE_RESIZE)
+			winch_pending = 1;
+		return 033;
+	}
+	seq[n++] = (unsigned char) c;
+
+	if (c == 'O') {
+		unsigned f = read_byte (ESCAPE_DELAY);
+		if (f <= 0xff) {
+			if (f == 'M')
+				return 015;
+			unsigned code = final_to_code ((char) f);
+			if (code != CODE_NONE)
+				return code;
+			seq[n++] = (unsigned char) f;
+		} else if (f == CODE_RESIZE)
+			winch_pending = 1;
+		inq_unread (seq, n);
+		return 033;
+	}
+
+	if (c != '[') {
+		inq_unread (seq, n);
+		return 033;
+	}
+
+	/* CSI: parameters, intermediates, then a final byte. */
+	long params[4] = { 0, 0, 0, 0 };
+	size_t nparams = 0;
+	bool have_digit = false;
+	for (;;) {
+		unsigned b = read_byte (ESCAPE_DELAY);
+		if (b > 0xff || n >= sizeof seq) {
+			if (b == CODE_RESIZE)
+				winch_pending = 1;
+			inq_unread (seq, n);
+			return 033;
+		}
+		seq[n++] = (unsigned char) b;
+		if (b >= '0' && b <= '9') {
+			if (nparams < 4)
+				params[nparams] = params[nparams] * 10 + (long) (b - '0');
+			have_digit = true;
+		} else if (b == ';') {
+			if (nparams < 4)
+				nparams++;
+			have_digit = false;
+		} else if (b >= 0x20 && b <= 0x3f) {
+			/* Other parameter or intermediate bytes. */
+		} else if (b >= 0x40 && b <= 0x7e) {
+			if (have_digit && nparams < 4)
+				nparams++;
+			if (b == '[' && n == 2) {
+				/* Linux console function keys: ESC [ [ A-E. */
+				unsigned f = read_byte (ESCAPE_DELAY);
+				if (f >= 'A' && f <= 'E')
+					return CODE_F1 + (f - 'A');
+				return CODE_IGNORE;
+			}
+			unsigned mods = nparams >= 2 ? csi_modifiers (params[1]) : 0;
+			unsigned code;
+			if (b == '~')
+				code = tilde_to_code (params[0]);
+			else if (b == 'Z')
+				return 011;
+			else
+				code = final_to_code ((char) b);
+			if (code == CODE_NONE || code == CODE_IGNORE)
+				return CODE_IGNORE;
+			return code == CODE_PASTE ? code : code | mods;
+		} else {
+			inq_unread (seq, n);
+			return 033;
+		}
+	}
+}
+
+static unsigned
+read_code (int delay)
+{
+	unsigned c = read_byte (delay);
+	if (c == 033)
+		return decode_escape ();
+	return c;
+}
+
+static unsigned
+get_char (int delay)
+{
+	if (key_buf_n > 0)
+		return key_buf[--key_buf_n];
+
+	for (;;) {
+		unsigned c = read_code (delay);
+		if (c == CODE_IGNORE)
+			continue;
+		if (c == CODE_RESIZE) {
+			query_size ();
+			alloc_screens ();
+			resize_windows ();
+			continue;
+		}
+		return c;
+	}
+}
+
+static Keystroke
+codetokey (unsigned c)
+{
+	if (c == CODE_NONE)
+		return KBD_NOKEY;
+
+	if (c >= CODE_UP) {
+		Keystroke mods = 0;
+		if (c & CODE_MOD_CTRL)
+			mods |= KBD_CTRL;
+		if (c & CODE_MOD_META)
+			mods |= KBD_META;
+		switch (c & ~CODE_MODS) {
+		case CODE_UP: return KBD_UP | mods;
+		case CODE_DOWN: return KBD_DOWN | mods;
+		case CODE_LEFT: return KBD_LEFT | mods;
+		case CODE_RIGHT: return KBD_RIGHT | mods;
+		case CODE_HOME: return KBD_HOME | mods;
+		case CODE_END: return KBD_END | mods;
+		case CODE_PPAGE: return KBD_PGUP | mods;
+		case CODE_NPAGE: return KBD_PGDN | mods;
+		case CODE_IC: return KBD_INS | mods;
+		case CODE_DC: return KBD_DEL | mods;
+		case CODE_F1: return KBD_F1 | mods;
+		case CODE_F2: return KBD_F2 | mods;
+		case CODE_F3: return KBD_F3 | mods;
+		case CODE_F4: return KBD_F4 | mods;
+		case CODE_F5: return KBD_F5 | mods;
+		case CODE_F6: return KBD_F6 | mods;
+		case CODE_F7: return KBD_F7 | mods;
+		case CODE_F8: return KBD_F8 | mods;
+		case CODE_F9: return KBD_F9 | mods;
+		case CODE_F10: return KBD_F10 | mods;
+		case CODE_F11: return KBD_F11 | mods;
+		case CODE_F12: return KBD_F12 | mods;
+		default: return KBD_NOKEY;
+		}
+	}
+
+	switch (c) {
+	case '\0':		/* C-@ */
+		return KBD_CTRL | '@';
+	case 011:
+		return KBD_TAB;
+	case 015:
+		return KBD_RET;
+	case 033:		/* META */
+		return KBD_META;
+	case 034:
+		return KBD_CTRL | '\\';
+	case 035:
+		return KBD_CTRL | ']';
+	case 036:
+		return KBD_CTRL | '^';
+	case 037:
+		return KBD_CTRL | '_';
+	case 0177:		/* BS */
+		return KBD_BS;
+	default:
+		if (c >= 01 && c <= 032)	/* C-a ... C-z */
+			return KBD_CTRL | ('a' + c - 1);
+		return c;
+	}
+}
+
+static unsigned
+special_code (Keystroke key)
+{
+	switch (key) {
+	case KBD_PGUP: return CODE_PPAGE;
+	case KBD_PGDN: return CODE_NPAGE;
+	case KBD_HOME: return CODE_HOME;
+	case KBD_END: return CODE_END;
+	case KBD_DEL: return CODE_DC;
+	case KBD_INS: return CODE_IC;
+	case KBD_LEFT: return CODE_LEFT;
+	case KBD_RIGHT: return CODE_RIGHT;
+	case KBD_UP: return CODE_UP;
+	case KBD_DOWN: return CODE_DOWN;
+	case KBD_F1: return CODE_F1;
+	case KBD_F2: return CODE_F2;
+	case KBD_F3: return CODE_F3;
+	case KBD_F4: return CODE_F4;
+	case KBD_F5: return CODE_F5;
+	case KBD_F6: return CODE_F6;
+	case KBD_F7: return CODE_F7;
+	case KBD_F8: return CODE_F8;
+	case KBD_F9: return CODE_F9;
+	case KBD_F10: return CODE_F10;
+	case KBD_F11: return CODE_F11;
+	case KBD_F12: return CODE_F12;
+	default: return CODE_NONE;
+	}
+}
+
+/* Convert a keystroke into the codes that would produce it, in reading
+   order. Returns the number of codes (at most 2). */
+static size_t
+keytocodes (Keystroke key, unsigned codes[2])
+{
+	size_t n = 0;
+
+	if (key == KBD_NOKEY)
+		return 0;
+
+	if (key & KBD_META)	/* META */
+		codes[n++] = 033;
+	key &= ~KBD_META;
+
+	unsigned special = special_code (key & ~KBD_CTRL);
+	if (special != CODE_NONE) {
+		codes[n++] = special | ((key & KBD_CTRL) ? CODE_MOD_CTRL : 0);
+		return n;
+	}
+
+	switch (key) {
+	case KBD_CTRL | '@':
+		codes[n++] = '\0';
+		break;
+	case KBD_TAB:
+		codes[n++] = 011;
+		break;
+	case KBD_RET:
+		codes[n++] = 015;
+		break;
+	case KBD_CTRL | '\\':
+		codes[n++] = 034;
+		break;
+	case KBD_CTRL | ']':
+		codes[n++] = 035;
+		break;
+	case KBD_CTRL | '^':
+		codes[n++] = 036;
+		break;
+	case KBD_CTRL | '_':
+		codes[n++] = 037;
+		break;
+	case KBD_BS:
+		codes[n++] = 0177;
+		break;
+	default:
+		if ((key & KBD_CTRL) && (key & 0xff) >= 'a' && (key & 0xff) <= 'z' &&
+		    (key & ~KBD_CTRL) <= 0xff)
+			codes[n++] = (key & 0xff) + 1 - 'a';
+		else if ((key & 0xff) == key)
+			codes[n++] = key;
+		break;
+	}
+
+	return n;
+}
+
+static char *
+read_bracketed_paste_payload (void)
+{
+	StrBuf text;
+	sb_init (&text);
+	size_t matched = 0, end_len = strlen (BRACKETED_PASTE_END);
+
+	for (;;) {
+		unsigned c = read_byte (GETKEY_DEFAULT);
+		if (c == CODE_RESIZE) {
+			winch_pending = 1;
+			continue;
+		}
+		if (c > 0xff)
+			break;
+		if (c == (unsigned char) BRACKETED_PASTE_END[matched]) {
+			if (++matched == end_len)
+				break;
+			continue;
+		}
+
+		sb_addn (&text, BRACKETED_PASTE_END, matched);
+		matched = 0;
+
+		if (c == (unsigned char) BRACKETED_PASTE_END[0])
+			matched = 1;
+		else
+			sb_addc (&text, (char) c);
+	}
+
+	return sb_take (&text);
+}
+
+Keystroke
+term_getkey (int delay)
+{
+	unsigned c = get_char (delay);
+
+	if (c == CODE_PASTE) {
+		free (pending_paste_text);
+		pending_paste_text = read_bracketed_paste_payload ();
+		return KBD_BRACKETED_PASTE;
+	}
+
+	if (c == 033) {
+		Keystroke key = codetokey (get_char (GETKEY_DEFAULT));
+		while (key == KBD_META)
+			key = codetokey (get_char (GETKEY_DEFAULT)) | KBD_META;
+		return key | KBD_META;
+	}
+
+	return codetokey (c);
+}
+
+unsigned
+term_getkey_unfiltered (int delay)
+{
+	if (key_buf_n > 0)
+		return key_buf[--key_buf_n];
+
+	for (;;) {
+		unsigned c = read_byte (delay);
+		if (c == CODE_RESIZE) {
+			query_size ();
+			alloc_screens ();
+			resize_windows ();
+			continue;
+		}
+		return c;
+	}
+}
+
+void
+term_ungetkey (Keystroke key)
+{
+	unsigned codes[2];
+	size_t n = keytocodes (key, codes);
+	for (size_t i = n; i > 0; i--)
+		key_buf_push (codes[i - 1]);
+}
+
+char *
+term_take_pending_paste (void)
+{
+	char *text = pending_paste_text;
+	pending_paste_text = NULL;
+	return text;
+}

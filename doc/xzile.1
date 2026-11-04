@@ -1,0 +1,65 @@
+.TH XZILE 1 "2026" "XZile 2.7.0" "User Commands"
+.SH NAME
+xzile \- XZile eXtends Zile, a lightweight Emacs clone
+.SH SYNOPSIS
+.B xzile
+[\fIOPTION-OR-FILENAME\fR]...
+.SH DESCRIPTION
+XZile is a lightweight Emacs clone that provides a subset of Emacs's
+functionality suitable for basic editing.
+.SS "Initialization options:"
+.TP
+\fB\-\-no\-init\-file\fR, \fB\-q\fR
+do not load ~/.xzile
+.TP
+\fB\-\-funcall\fR, \fB\-f\fR FUNC
+call XZile Lisp function FUNC with no arguments
+.TP
+\fB\-\-load\fR, \fB\-l\fR FILE
+load XZile Lisp FILE using the load function
+.TP
+\fB\-\-debug\-log\fR FILE
+append debug logs to FILE
+.TP
+\fB\-\-debug\-categories\fR CATS
+comma-separated debug categories, e.g. syntax,filetype
+.TP
+\fB\-\-help\fR
+display this help message and exit
+.TP
+\fB\-\-version\fR
+display version information and exit
+.SS "Action options:"
+.TP
+FILE
+visit FILE using find-file
+.TP
++LINE FILE
+visit FILE using find-file, then go to line LINE
+.PP
+Exit status is 0 if OK, 1 if it cannot start up, for example because
+of an invalid command-line argument, and 2 if it crashes or runs out
+of memory.
+.SH ENVIRONMENT
+.TP
+.B TERM
+Used to decide whether the terminal supports colours.
+.TP
+.BR LINES ", " COLUMNS
+If set, override the size of the terminal.
+.TP
+.BR XZILE_DEBUG ", " XZILE_DEBUG_LOG
+Debug categories and log file, as for the debug options.
+.SH FILES
+~/.xzile \(em user's XZile init file
+.PP
+/usr/local/share/doc/xzile/dotzile.sample \(em which contains some useful
+code for the init file.
+.SH AUTHOR
+Zile was written by Sandro Sigala, David A. Capello and Reuben Thomas.
+The Lisp interpreter is based on code by Scott Lawrence.
+XZile was extended by Zeyi2, as a side project.
+.SH "REPORTING BUGS"
+Report bugs to bug-zile@gnu.org.
+.SH "SEE ALSO"
+.BR emacs (1)
