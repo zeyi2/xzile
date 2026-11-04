@@ -19,6 +19,7 @@
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 #include "xzile.h"
+#include "screen.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -86,37 +87,14 @@ static const char BRACKETED_PASTE_END[] = "\033[201~";
  * Screen state.
  *--------------------------------------------------------------------------*/
 
-enum {
-	ATTR_BOLD = 1,
-	ATTR_UNDERLINE = 2,
-	ATTR_REVERSE = 4,
-	ATTR_DIM = 8,
-	ATTR_ITALIC = 16,
-	ATTR_STRIKE = 32,
-};
-
-typedef struct {
-	int fg, bg;		/* Colour index, VCOLOR_RGB value, or TERM_COLOR_DEFAULT. */
-	unsigned flags;
-} Attr;
-
-typedef struct {
-	char ch[16];		/* UTF-8 bytes; empty for the right half of a wide char. */
-	Attr attr;
-} Cell;
 
 static bool initialized = false;
 static bool tty_in = false;
 static struct termios orig_termios;
-static size_t rows = 24, cols = 80;
-static Cell *screen = NULL;	/* What we want displayed. */
 static Cell *phys = NULL;	/* What we believe is displayed. */
 static bool phys_valid = false;
-static size_t cur_y = 0, cur_x = 0;
-static Attr cur_attr = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
 static TerminalCapabilities capabilities;
 static bool truecolor = false;
-static bool cursor_visible = true;
 
 static int signal_pipe[2] = { -1, -1 };
 static volatile sig_atomic_t winch_pending = 0;
@@ -286,16 +264,7 @@ tstp_handler (int signo)
  *--------------------------------------------------------------------------*/
 
 static void
-blank_cell (Cell *c)
-{
-	c->ch[0] = ' ';
-	c->ch[1] = '\0';
-	c->attr.fg = c->attr.bg = TERM_COLOR_DEFAULT;
-	c->attr.flags = 0;
-}
-
-static void
-query_size (void)
+query_size (size_t *out_rows, size_t *out_cols)
 {
 	size_t r = 0, c = 0;
 	long n;
@@ -315,26 +284,19 @@ query_size (void)
 			c = ws.ws_col;
 	}
 
-	rows = r > 0 ? r : 24;
-	cols = c > 0 ? c : 80;
-	if (rows < 3)
-		rows = 3;
-	if (cols < 10)
-		cols = 10;
+	*out_rows = MAX (r > 0 ? r : 24, 3);
+	*out_cols = MAX (c > 0 ? c : 80, 10);
 }
 
 static void
 alloc_screens (void)
 {
-	free (screen);
+	size_t rows, cols;
+	query_size (&rows, &cols);
+	screen_resize (rows, cols);
 	free (phys);
-	screen = xmalloc (rows * cols * sizeof (Cell));
 	phys = xmalloc (rows * cols * sizeof (Cell));
-	for (size_t i = 0; i < rows * cols; i++)
-		blank_cell (&screen[i]);
 	phys_valid = false;
-	cur_y = MIN (cur_y, rows - 1);
-	cur_x = MIN (cur_x, cols - 1);
 }
 
 static void
@@ -389,7 +351,6 @@ term_init (void)
 	sigaction (SIGCHLD, &sa, NULL);
 	install_tstp_handler ();
 
-	query_size ();
 	alloc_screens ();
 	detect_capabilities ();
 
@@ -416,18 +377,6 @@ term_initialized (void)
 	return initialized;
 }
 
-size_t
-term_width (void)
-{
-	return cols;
-}
-
-size_t
-term_height (void)
-{
-	return rows;
-}
-
 const TerminalCapabilities *
 term_get_capabilities (void)
 {
@@ -435,228 +384,12 @@ term_get_capabilities (void)
 }
 
 
-/*--------------------------------------------------------------------------
- * Drawing into the virtual screen.
- *--------------------------------------------------------------------------*/
-
-void
-term_move (size_t y, size_t x)
-{
-	cur_y = MIN (y, rows - 1);
-	cur_x = MIN (x, cols - 1);
-}
-
-static void
-put_cell (const char *bytes, size_t n, size_t width)
-{
-	if (width == 2 && cur_x + 1 >= cols) {
-		/* A wide character does not fit: pad the line instead. */
-		put_cell (" ", 1, 1);
-		return;
-	}
-
-	Cell *c = &screen[cur_y * cols + cur_x];
-	n = MIN (n, sizeof c->ch - 1);
-	memcpy (c->ch, bytes, n);
-	c->ch[n] = '\0';
-	c->attr = cur_attr;
-	if (width == 2) {
-		Cell *c2 = c + 1;
-		c2->ch[0] = '\0';
-		c2->attr = cur_attr;
-	}
-
-	cur_x += width;
-	if (cur_x >= cols) {
-		if (cur_y + 1 < rows) {
-			cur_x = 0;
-			cur_y++;
-		} else
-			cur_x = cols - 1;
-	}
-}
-
-/* Append a zero-width character to the previous cell. */
-static void
-put_combining (const char *bytes, size_t n)
-{
-	if (cur_x == 0)
-		return;
-	Cell *c = &screen[cur_y * cols + cur_x - 1];
-	if (c->ch[0] == '\0' && cur_x >= 2)
-		c--;
-	size_t len = strlen (c->ch);
-	if (len + n < sizeof c->ch) {
-		memcpy (c->ch + len, bytes, n);
-		c->ch[len + n] = '\0';
-	}
-}
-
-void
-term_clrtoeol (void)
-{
-	Attr saved = cur_attr;
-	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
-	cur_attr.flags = 0;
-	for (size_t x = cur_x; x < cols; x++) {
-		Cell *c = &screen[cur_y * cols + x];
-		c->ch[0] = ' ';
-		c->ch[1] = '\0';
-		c->attr = cur_attr;
-	}
-	cur_attr = saved;
-}
-
-void
-term_addnstr (const char *s, size_t len)
-{
-	for (size_t i = 0; i < len;) {
-		unsigned char b = (unsigned char) s[i];
-		if (b == '\n') {
-			term_clrtoeol ();
-			if (cur_y + 1 < rows) {
-				cur_y++;
-				cur_x = 0;
-			}
-			i++;
-		} else if (b == '\t') {
-			do
-				put_cell (" ", 1, 1);
-			while (cur_x % 8 != 0 && cur_x != 0);
-			i++;
-		} else if (b < 0x20 || b == 0x7f) {
-			char buf[2] = { '^', (char) (b == 0x7f ? '?' : b + '@') };
-			put_cell (buf, 1, 1);
-			put_cell (buf + 1, 1, 1);
-			i++;
-		} else if (b < 0x80) {
-			put_cell ((const char *) &s[i], 1, 1);
-			i++;
-		} else {
-			size_t char_len;
-			uint32_t cp = utf8_decode (s, len, i, &char_len);
-			if (cp == UTF8_REPLACEMENT && char_len == 1) {
-				put_cell ("?", 1, 1);
-			} else if (cp < 0xA0) {
-				char buf[8];
-				int n = snprintf (buf, sizeof buf, "\\%o", (unsigned) cp);
-				for (int k = 0; k < n; k++)
-					put_cell (buf + k, 1, 1);
-			} else {
-				int w = wcwidth ((wchar_t) cp);
-				if (w < 0)
-					w = 1;
-				if (w == 0)
-					put_combining (s + i, char_len);
-				else
-					put_cell (s + i, char_len, (size_t) (w > 1 ? 2 : 1));
-			}
-			i += char_len;
-		}
-	}
-}
-
-void
-term_addstr (const char *s)
-{
-	term_addnstr (s, strlen (s));
-}
-
-void
-term_addch (char c)
-{
-	term_addnstr (&c, 1);
-}
-
 void
 term_clear (void)
 {
-	for (size_t i = 0; i < rows * cols; i++)
-		blank_cell (&screen[i]);
+	for (size_t i = 0; i < scr_rows * scr_cols; i++)
+		screen_blank_cell (&scr_cells[i]);
 	phys_valid = false;
-}
-
-void
-term_attrset (size_t attr)
-{
-	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
-	cur_attr.flags = 0;
-	if (attr & FONT_REVERSE)
-		cur_attr.flags |= ATTR_REVERSE;
-	if (attr & FONT_UNDERLINE)
-		cur_attr.flags |= ATTR_UNDERLINE;
-}
-
-void
-term_apply_style (const TerminalStyle *style)
-{
-	cur_attr.fg = cur_attr.bg = TERM_COLOR_DEFAULT;
-	cur_attr.flags = 0;
-
-	if (style->bold)
-		cur_attr.flags |= ATTR_BOLD;
-	if (style->underline)
-		cur_attr.flags |= ATTR_UNDERLINE;
-	if (style->reverse)
-		cur_attr.flags |= ATTR_REVERSE;
-
-	if (!capabilities.has_colors || (!style->has_foreground && !style->has_background))
-		return;
-
-	int fg = style->has_foreground ? style->foreground : TERM_COLOR_DEFAULT;
-	int bg = style->has_background ? style->background : TERM_COLOR_DEFAULT;
-	if (!capabilities.supports_default_colors) {
-		/* Use the concrete fallbacks precomputed by the resolver. */
-		if (fg == TERM_COLOR_DEFAULT)
-			fg = style->default_foreground_fallback;
-		if (bg == TERM_COLOR_DEFAULT)
-			bg = style->default_background_fallback;
-	}
-	cur_attr.fg = fg < 0 ? TERM_COLOR_DEFAULT : fg;
-	cur_attr.bg = bg < 0 ? TERM_COLOR_DEFAULT : bg;
-}
-
-void
-term_apply_face (const char *face_name)
-{
-	TerminalStyle style;
-	if (resolve_terminal_style (face_name, &style))
-		term_apply_style (&style);
-	else
-		term_attrset (FONT_NORMAL);
-}
-
-void
-term_set_vattr (const VAttr *a)
-{
-	cur_attr.fg = a->fg;
-	cur_attr.bg = a->bg;
-	cur_attr.flags = 0;
-	if (a->flags & VATTR_BOLD)
-		cur_attr.flags |= ATTR_BOLD;
-	if (a->flags & VATTR_DIM)
-		cur_attr.flags |= ATTR_DIM;
-	if (a->flags & VATTR_ITALIC)
-		cur_attr.flags |= ATTR_ITALIC;
-	if (a->flags & VATTR_UNDERLINE)
-		cur_attr.flags |= ATTR_UNDERLINE;
-	if (a->flags & VATTR_REVERSE)
-		cur_attr.flags |= ATTR_REVERSE;
-	if (a->flags & VATTR_STRIKE)
-		cur_attr.flags |= ATTR_STRIKE;
-}
-
-void
-term_set_cursor_visible (bool visible)
-{
-	cursor_visible = visible;
-}
-
-void
-term_get_cursor (size_t *y, size_t *x)
-{
-	*y = cur_y;
-	*x = cur_x;
 }
 
 void
@@ -772,18 +505,18 @@ term_refresh (void)
 
 	if (!phys_valid) {
 		sb_add (&sb, "\033[0m\033[H\033[2J");
-		for (size_t i = 0; i < rows * cols; i++)
-			blank_cell (&phys[i]);
+		for (size_t i = 0; i < scr_rows * scr_cols; i++)
+			screen_blank_cell (&phys[i]);
 	}
 
 	Attr attr = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
 	bool attr_known = false;
 	size_t py = NOPOS, px = NOPOS;	/* Physical cursor position, if known. */
 
-	for (size_t y = 0; y < rows; y++)
-		for (size_t x = 0; x < cols; x++) {
-			Cell *want = &screen[y * cols + x];
-			Cell *have = &phys[y * cols + x];
+	for (size_t y = 0; y < scr_rows; y++)
+		for (size_t x = 0; x < scr_cols; x++) {
+			Cell *want = &scr_cells[y * scr_cols + x];
+			Cell *have = &phys[y * scr_cols + x];
 			if (cell_eq (want, have))
 				continue;
 			if (want->ch[0] == '\0') {
@@ -800,16 +533,16 @@ term_refresh (void)
 			}
 			sb_add (&sb, want->ch);
 			*have = *want;
-			bool wide = x + 1 < cols && screen[y * cols + x + 1].ch[0] == '\0';
+			bool wide = x + 1 < scr_cols && scr_cells[y * scr_cols + x + 1].ch[0] == '\0';
 			py = y;
 			px = x + (wide ? 2 : 1);
-			if (px >= cols)
+			if (px >= scr_cols)
 				px = NOPOS;
 		}
 	phys_valid = true;
 
 	sb_add (&sb, "\033[0m");
-	sb_addf (&sb, "\033[%zu;%zuH%s", cur_y + 1, cur_x + 1, cursor_visible ? "\033[?25h" : "");
+	sb_addf (&sb, "\033[%zu;%zuH%s", scr_y + 1, scr_x + 1, scr_cursor_visible ? "\033[?25h" : "");
 	write_all_fd (TERM_OUT, sb.s, sb.len);
 	sb_free (&sb);
 }
@@ -1113,7 +846,6 @@ get_char (int delay)
 		if (c == CODE_IGNORE)
 			continue;
 		if (c == CODE_RESIZE) {
-			query_size ();
 			alloc_screens ();
 			resize_windows ();
 			continue;
@@ -1343,7 +1075,6 @@ term_getkey_unfiltered (int delay)
 	for (;;) {
 		unsigned c = read_byte (delay);
 		if (c == CODE_RESIZE) {
-			query_size ();
 			alloc_screens ();
 			resize_windows ();
 			continue;
