@@ -84,6 +84,7 @@ OBJS = \
 	src/redisplay.o \
 	src/regex.o \
 	src/registers.o \
+	src/screen.o \
 	src/search.o \
 	src/selectors.o \
 	src/shell.o \
@@ -111,6 +112,7 @@ src/xzile: $(OBJS)
 	$(CC) $(PTHREAD_FLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
 
 $(OBJS) src/estr-test.o: src/xzile.h
+src/screen.o src/term.o: src/screen.h
 src/variables.o src/mkdotzile: src/tbl_vars.h
 
 .SUFFIXES: .c .o
