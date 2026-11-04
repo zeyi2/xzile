@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Orb initialization: system packages needed to build xzile/xzile-gui and
+# to exercise the GUI natively under a virtual X server.
+set -euo pipefail
+
+packages=(
+  build-essential
+  pkg-config
+  libsdl2-dev
+  libsdl2-ttf-dev
+  xvfb
+  xdotool
+  fonts-dejavu-core
+)
+
+now_ms() {
+  local t=${EPOCHREALTIME/[.,]/}
+  echo $((t / 1000))
+}
+
+start_all=$(now_ms)
+step_start=$start_all
+step() {
+  local now
+  now=$(now_ms)
+  printf '[setup] %s (%sms)\n' "$1" "$((now - step_start))"
+  step_start=$now
+}
+
+if [ "$(id -u)" -eq 0 ]; then
+  sudo=()
+else
+  sudo=(sudo)
+fi
+
+missing=()
+for pkg in "${packages[@]}"; do
+  status=$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)
+  if [ "$status" != "install ok installed" ]; then
+    missing+=("$pkg")
+  fi
+done
+step "checked ${#packages[@]} packages, ${#missing[@]} missing"
+
+if [ "${#missing[@]}" -gt 0 ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  "${sudo[@]}" apt-get update -qq
+  step "apt-get update"
+  "${sudo[@]}" env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y -qq --no-install-recommends "${missing[@]}"
+  step "installed: ${missing[*]}"
+else
+  step "all packages present, skipping apt"
+fi
+
+printf '[setup] done in %sms\n' "$(($(now_ms) - start_all))"
