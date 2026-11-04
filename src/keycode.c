@@ -59,6 +59,7 @@ static const KeyInfo keyinfo[] = {
 	{ KBD_CTRL, "\\C-", "C-" },
 	{ KBD_DEL, "\\DELETE", "<delete>" },
 	{ KBD_DOWN, "\\DOWN", "<down>" },
+	{ KBD_DRAG_MOUSE_1, "\\DRAGMOUSE1", "<drag-mouse-1>" },
 	/* Kludge to make keystrings work in both Emacs and Zile. */
 	{ 033, "\\e", "ESC" },
 	{ KBD_ESCAPE, "\\ESC", "<escape>" },
@@ -79,6 +80,7 @@ static const KeyInfo keyinfo[] = {
 	{ KBD_INS, "\\INSERT", "<insert>" },
 	{ KBD_LEFT, "\\LEFT", "<left>" },
 	{ KBD_META, "\\M-", "M-" },
+	{ KBD_MOUSE_1, "\\MOUSE1", "<mouse-1>" },
 	{ KBD_PGDN, "\\NEXT", "<next>" },
 	{ KBD_PGDN, "\\PAGEDOWN", "<pagedown>" },
 	{ KBD_PGUP, "\\PAGEUP", "<pageup>" },
@@ -91,6 +93,8 @@ static const KeyInfo keyinfo[] = {
 	{ KBD_TAB, "\\TAB", "<TAB>" },
 	{ KBD_TAB, "\\t", NULL },
 	{ KBD_UP, "\\UP", "<up>" },
+	{ KBD_WHEEL_DOWN, "\\WHEELDOWN", "<wheel-down>" },
+	{ KBD_WHEEL_UP, "\\WHEELUP", "<wheel-up>" },
 	{ '\\', "\\\\", "\\" },
 };
 

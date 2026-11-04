@@ -22,6 +22,8 @@
 #define THEME_DEFAULT_DARK "default-dark"
 #define THEME_DEFAULT_LIGHT "default-light"
 #define THEME_TERMINAL_DEFAULT "terminal-default"
+#define THEME_XZILE_DARK "xzile-dark"
+#define THEME_XZILE_LIGHT "xzile-light"
 
 /* Faces may inherit; this bounds the inheritance depth. */
 #define MAX_INHERIT_DEPTH 32
@@ -100,6 +102,7 @@ static const char *const builtin_faces[] = {
 	FACE_PICKER_GROUP,
 	FACE_SHOW_PAREN_MATCH,
 	FACE_SHOW_PAREN_MISMATCH,
+	FACE_CURSOR,
 };
 
 static bool
@@ -359,6 +362,8 @@ lookup_terminal_color (const char *color_name, const TerminalCapabilities *capab
 	if (!parse_hex_color (color_name, &red, &green, &blue))
 		return TERM_COLOR_UNSPECIFIED;
 
+	if (capabilities->truecolor)
+		return VCOLOR_RGB (red, green, blue);
 	if (capabilities->color_count >= 256)
 		return color_rgb_to_256 (red, green, blue);
 	return color_rgb_to_16 (red, green, blue);
@@ -657,6 +662,104 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, NULL, NULL, NULL, T, U, T);
 }
 
+/* Themes in hex colours for truecolor displays such as the GUI; other
+   terminals get the nearest palette colours. */
+static void
+define_xzile_dark_theme (void)
+{
+	Theme *t = define_theme (THEME_XZILE_DARK, "dark");
+
+	set_builtin_face (t, FACE_DEFAULT, "#d5d9e0", "#17191e", NULL, U, U, U);
+	set_builtin_face (t, FACE_CURSOR, NULL, "#82aaff", NULL, U, U, U);
+	set_builtin_face (t, FACE_REGION, NULL, "#2d3a55", NULL, U, U, U);
+	set_builtin_face (t, FACE_MODE_LINE, "#e3e7ee", "#272b35", NULL, U, U, U);
+	set_builtin_face (t, FACE_MODE_LINE_INACTIVE, "#7c8494", "#1d2026", FACE_MODE_LINE, U, U, U);
+	set_builtin_face (t, FACE_MINIBUFFER_PROMPT, "#82aaff", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_VERTICAL_BORDER, "#2b2f39", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_LINE_NUMBER, "#4a505e", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_LINE_NUMBER_CURRENT_LINE, "#c3c9d4", NULL, FACE_LINE_NUMBER, U, U, U);
+	set_builtin_face (t, FACE_TRAILING_WHITESPACE, NULL, "#5c2b33", NULL, U, U, U);
+	set_builtin_face (t, FACE_ISEARCH, "#17191e", "#ffc777", NULL, T, U, U);
+	set_builtin_face (t, FACE_LAZY_HIGHLIGHT, NULL, "#3b4463", NULL, U, U, U);
+	set_builtin_face (t, FACE_MATCH, "#17191e", "#a6da95", NULL, U, U, U);
+	set_builtin_face (t, FACE_ERROR, "#ff7a93", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_WARNING, "#ffc777", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_SUCCESS, "#a6da95", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_COMMENT, "#5f6779", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_STRING, "#a6da95", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_KEYWORD, "#c099ff", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_FUNCTION_NAME, "#82aaff", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_VARIABLE_NAME, "#d5d9e0", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_TYPE, "#65d1e6", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_CONSTANT, "#ff9e64", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_BUILTIN, "#86e1fc", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_PREPROCESSOR, "#f5a97f", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_WARNING, NULL, NULL, FACE_WARNING, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_SECTION_HEADING, "#ffc777", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_FILE_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_HUNK_HEADING, "#aab1c0", "#272b35", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_ADDED, "#a6da95", "#1f2b22", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_REMOVED, "#ff7a93", "#2e1d22", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_HASH, "#5f6779", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "#86e1fc", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "#a6da95", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "#5f6779", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_SELECTION, NULL, "#2a3142", NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_MATCH, "#ffc777", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_ANNOTATION, "#5f6779", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_GROUP, "#c099ff", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "#ffffff", "#3e5687", NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "#ffffff", "#c53b53", NULL, T, U, U);
+}
+
+static void
+define_xzile_light_theme (void)
+{
+	Theme *t = define_theme (THEME_XZILE_LIGHT, "light");
+
+	set_builtin_face (t, FACE_DEFAULT, "#383a42", "#fbfbfc", NULL, U, U, U);
+	set_builtin_face (t, FACE_CURSOR, NULL, "#3b6fe0", NULL, U, U, U);
+	set_builtin_face (t, FACE_REGION, NULL, "#d6e2fb", NULL, U, U, U);
+	set_builtin_face (t, FACE_MODE_LINE, "#2b2d33", "#e8eaef", NULL, U, U, U);
+	set_builtin_face (t, FACE_MODE_LINE_INACTIVE, "#8a8f99", "#f1f2f5", FACE_MODE_LINE, U, U, U);
+	set_builtin_face (t, FACE_MINIBUFFER_PROMPT, "#3b6fe0", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_VERTICAL_BORDER, "#e1e3e8", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_LINE_NUMBER, "#b4b8c1", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_LINE_NUMBER_CURRENT_LINE, "#4b4f58", NULL, FACE_LINE_NUMBER, U, U, U);
+	set_builtin_face (t, FACE_TRAILING_WHITESPACE, NULL, "#f9d4d8", NULL, U, U, U);
+	set_builtin_face (t, FACE_ISEARCH, "#2b2d33", "#ffd27a", NULL, T, U, U);
+	set_builtin_face (t, FACE_LAZY_HIGHLIGHT, NULL, "#fdecc0", NULL, U, U, U);
+	set_builtin_face (t, FACE_MATCH, "#2b2d33", "#c8ecc0", NULL, U, U, U);
+	set_builtin_face (t, FACE_ERROR, "#d6304b", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_WARNING, "#b86e00", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_SUCCESS, "#3a8a2e", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_COMMENT, "#9da2ad", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_STRING, "#3a8a2e", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_KEYWORD, "#a626a4", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_FUNCTION_NAME, "#3b6fe0", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_VARIABLE_NAME, "#383a42", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_TYPE, "#0f7f8f", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_CONSTANT, "#c4570d", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_BUILTIN, "#0b7fbf", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_PREPROCESSOR, "#b86e00", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_FONT_LOCK_WARNING, NULL, NULL, FACE_WARNING, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_SECTION_HEADING, "#a626a4", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_FILE_HEADING, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_HUNK_HEADING, "#4b4f58", "#eceef2", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_ADDED, "#2f7a24", "#e6f6e2", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_DIFF_REMOVED, "#c42b44", "#fbe7ea", NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_HASH, "#9da2ad", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_LOCAL, "#0b7fbf", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_BRANCH_REMOTE, "#3a8a2e", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MAGIT_LOG_DATE, "#9da2ad", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_SELECTION, NULL, "#e3e9f8", NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_MATCH, "#c4570d", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_PICKER_ANNOTATION, "#9da2ad", NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_PICKER_GROUP, "#a626a4", NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "#2b2d33", "#c9d8fb", NULL, T, U, U);
+	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "#ffffff", "#d6304b", NULL, T, U, U);
+}
+
 static char *
 minibuf_read_theme_name (const char *fmt, ...)
 {
@@ -951,7 +1054,9 @@ theme_init (void)
 	define_default_dark_theme ();
 	define_default_light_theme ();
 	define_terminal_default_theme ();
-	activate_theme (THEME_TERMINAL_DEFAULT);
+	define_xzile_dark_theme ();
+	define_xzile_light_theme ();
+	activate_theme (term_get_capabilities ()->gui ? THEME_XZILE_DARK : THEME_TERMINAL_DEFAULT);
 
 	lisp_func_new ("define-theme", F_define_theme, false,
 		       "Define or replace the theme named THEME.\n"

@@ -254,6 +254,12 @@ typedef unsigned Keystroke;
 #define KBD_F12 00433u
 #define KBD_BRACKETED_PASTE 00434u
 #define KBD_ESCAPE 00435u	/* A bare ESC, in terminal buffers. */
+/* Mouse events, which only the GUI produces; term_mouse_position
+   gives the cell they happened at. */
+#define KBD_MOUSE_1 00436u
+#define KBD_DRAG_MOUSE_1 00437u
+#define KBD_WHEEL_UP 00440u
+#define KBD_WHEEL_DOWN 00441u
 
 typedef struct {
 	Keystroke *v;
@@ -281,7 +287,7 @@ void pushkey (Keystroke key);
 void ungetkey (Keystroke key);
 
 /*--------------------------------------------------------------------------
- * Terminal (term.c).
+ * Terminal (term.c, or gui.c for the graphical frontend).
  *--------------------------------------------------------------------------*/
 
 #define FONT_NORMAL 0000
@@ -294,6 +300,8 @@ typedef struct {
 	bool supports_reverse;
 	bool supports_underline;
 	int color_count;
+	bool truecolor;		/* Colours may be VCOLOR_RGB values. */
+	bool gui;		/* A graphical window rather than a terminal. */
 } TerminalCapabilities;
 
 #define TERM_COLOR_UNSPECIFIED -2
@@ -337,6 +345,13 @@ Keystroke term_getkey (int delay);
 unsigned term_getkey_unfiltered (int delay);
 void term_ungetkey (Keystroke key);
 char *term_take_pending_paste (void);
+void term_suspend (void);
+/* The system clipboard, for a GUI: setting returns false and getting
+   NULL when the frontend has no clipboard of its own. */
+bool term_clipboard_set (const char *text, size_t len);
+char *term_clipboard_get (size_t *len);
+/* The cell of the last mouse event; false if there is no mouse. */
+bool term_mouse_position (size_t *y, size_t *x);
 
 /*--------------------------------------------------------------------------
  * Terminal emulator (vterm.c).
@@ -1102,6 +1117,7 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_PICKER_GROUP "picker-group"
 #define FACE_SHOW_PAREN_MATCH "show-paren-match"
 #define FACE_SHOW_PAREN_MISMATCH "show-paren-mismatch"
+#define FACE_CURSOR "cursor"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */

@@ -4,6 +4,13 @@ GNU Zile NEWS                                         -*- outline -*-
 
 ** New features
 
+  A graphical version, xzile-gui, for Linux and macOS (make gui): the
+  same editor in a window with anti-aliased fonts, truecolor themes
+  (xzile-dark and xzile-light), a modern status bar, mouse selection
+  and scrolling, the system clipboard, and Command/Super shortcuts.
+  It needs SDL2 and SDL2_ttf. Set the font with gui-font and
+  gui-font-size.
+
   Dired, a directory editor as in Emacs. Open it with C-x d (dired),
   C-x C-j (dired-jump), or by visiting a directory. In a Dired buffer:
 
