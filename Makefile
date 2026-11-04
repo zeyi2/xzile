@@ -216,8 +216,9 @@ install-gui: gui
 # it was built against.
 app: gui
 	rm -rf XZile.app
-	mkdir -p XZile.app/Contents/MacOS
+	mkdir -p XZile.app/Contents/MacOS XZile.app/Contents/Resources
 	cp src/xzile-gui XZile.app/Contents/MacOS/$(PACKAGE)-gui
+	cp pic/XZile.icns XZile.app/Contents/Resources/XZile.icns
 	sed 's/@VERSION@/$(VERSION)/g' Info.plist.in > XZile.app/Contents/Info.plist
 
 uninstall:

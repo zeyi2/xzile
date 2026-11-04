@@ -10,6 +10,8 @@
 	<string>cc.nekoarch.xzile</string>
 	<key>CFBundleExecutable</key>
 	<string>xzile-gui</string>
+	<key>CFBundleIconFile</key>
+	<string>XZile</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
