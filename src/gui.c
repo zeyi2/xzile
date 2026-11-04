@@ -865,6 +865,16 @@ show_cursor (SDL_Cursor *c)
 void
 term_init (void)
 {
+	/* An app launched from Finder or the Dock starts in `/'; start in
+	   the home directory instead, as a terminal session would. */
+	char *cwd = get_current_dir ();
+	if (strcmp (cwd, "/") == 0) {
+		char *home = get_home_dir ();
+		if (chdir (home) != 0) { /* Stay in `/'. */ }
+		free (home);
+	}
+	free (cwd);
+
 	if (pipe (signal_pipe) == 0)
 		for (int i = 0; i < 2; i++) {
 			fcntl (signal_pipe[i], F_SETFL, fcntl (signal_pipe[i], F_GETFL) | O_NONBLOCK);
