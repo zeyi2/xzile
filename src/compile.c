@@ -354,7 +354,7 @@ format_now (char *buf, size_t size)
 }
 
 static void
-on_exit (Process *p, int status, void *owner)
+on_process_exit (Process *p, int status, void *owner)
 {
 	(void) p;
 	Compilation *c = owner;
@@ -446,7 +446,7 @@ run_compile (const char *command, const char *dir)
 
 	static const char *const env[] = { "TERM=dumb", "INSIDE_XZILE=1", NULL };
 	const char *argv[] = { "/bin/sh", "-c", command, NULL };
-	c->proc = process_start (argv, NULL, dir, false, 0, 0, env, on_output, on_exit, c);
+	c->proc = process_start (argv, NULL, dir, false, 0, 0, env, on_output, on_process_exit, c);
 	if (c->proc == NULL) {
 		minibuf_error ("Cannot run `%s'", command);
 		return false;

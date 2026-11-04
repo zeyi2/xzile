@@ -133,7 +133,7 @@ vterm_osc (int code, const char *text, void *owner)
 static void enter_line_mode (Shell *sh);
 
 static void
-on_exit (Process *p, int status, void *owner)
+on_process_exit (Process *p, int status, void *owner)
 {
 	(void) p;
 	Shell *sh = owner;
@@ -583,7 +583,7 @@ start_terminal (const char *name, const char *const *argv, const char *exec_path
 		NULL
 	};
 	sh->proc = process_start (argv, exec_path, cur_bp->dir, true, rows, cols, env,
-				  on_output, on_exit, sh);
+				  on_output, on_process_exit, sh);
 	if (sh->proc == NULL) {
 		minibuf_error ("Cannot start %s", program);
 		vterm_free (sh->vt);
