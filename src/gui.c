@@ -844,6 +844,18 @@ chld_handler (int signo)
 	}
 }
 
+/* Mouse pointers: over text, and over dividers between windows. */
+static SDL_Cursor *cursor_ibeam, *cursor_rows, *cursor_cols, *cursor_shown;
+
+static void
+show_cursor (SDL_Cursor *c)
+{
+	if (c != NULL && c != cursor_shown) {
+		SDL_SetCursor (c);
+		cursor_shown = c;
+	}
+}
+
 void
 term_init (void)
 {
@@ -897,7 +909,10 @@ term_init (void)
 	grid_size (&rows, &cols);
 	screen_resize (rows, cols);
 
-	SDL_SetCursor (SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_IBEAM));
+	cursor_ibeam = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_IBEAM);
+	cursor_rows = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZENS);
+	cursor_cols = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZEWE);
+	show_cursor (cursor_ibeam);
 	SDL_StartTextInput ();
 	update_theme_colors ();
 	set_color (default_bg, 255);
@@ -1233,6 +1248,69 @@ pixel_to_cell (int wx, int wy, size_t *y, size_t *x)
 	*y = (size_t) MAX (0, MIN (cy, (long) scr_rows - 1));
 }
 
+/* Dragging the divider of a split to resize its windows. */
+static WinNode *drag_split;		/* NULL when not dragging. */
+static unsigned long drag_generation;	/* The layout's, when the drag began. */
+static size_t drag_start, drag_start_size;
+
+static SDL_Cursor *
+divider_cursor (const WinNode *split)
+{
+	return split == NULL ? cursor_ibeam : split->kind == SPLIT_ROWS ? cursor_rows : cursor_cols;
+}
+
+static bool
+drag_begin (size_t y, size_t x)
+{
+	WinNode *split = layout_divider_at (y, x);
+	if (split == NULL)
+		return false;
+	bool rows = split->kind == SPLIT_ROWS;
+	drag_split = split;
+	drag_generation = layout_generation ();
+	drag_start = rows ? y : x;
+	drag_start_size = rows ? split->left_or_top->height : split->left_or_top->width;
+	SDL_CaptureMouse (SDL_TRUE);
+	show_cursor (divider_cursor (split));
+	return true;
+}
+
+static void
+drag_end (void)
+{
+	if (drag_split == NULL)
+		return;
+	drag_split = NULL;
+	SDL_CaptureMouse (SDL_FALSE);
+	show_cursor (cursor_ibeam);
+}
+
+static void
+keep_point_visible (WinNode *leaf, void *data)
+{
+	(void) data;
+	Window *wp = leaf->wp;
+	if (wp->topdelta >= wp->eheight)
+		wp->topdelta = wp->eheight > 0 ? wp->eheight - 1 : 0;
+}
+
+static void
+drag_to (size_t y, size_t x)
+{
+	/* A command run during the drag may have freed the split. */
+	if (layout_generation () != drag_generation) {
+		drag_end ();
+		return;
+	}
+	long size = (long) drag_start_size - (long) drag_start +
+		(long) (drag_split->kind == SPLIT_ROWS ? y : x);
+	if (!layout_resize_split (drag_split, (size_t) MAX (size, 0)))
+		return;
+	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
+	winnode_each_leaf (root_node, keep_point_visible, NULL);
+	redisplay_after_output ();
+}
+
 static void
 handle_event (const SDL_Event *ev)
 {
@@ -1250,20 +1328,39 @@ handle_event (const SDL_Event *ev)
 		break;
 	case SDL_MOUSEBUTTONDOWN:
 		if (ev->button.button == SDL_BUTTON_LEFT) {
-			pixel_to_cell (ev->button.x, ev->button.y, &mouse_y, &mouse_x);
+			size_t y, x;
+			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
+			if (drag_split != NULL || drag_begin (y, x))
+				break;
+			mouse_y = y;
+			mouse_x = x;
 			mouse_down = true;
 			queue_push (KBD_MOUSE_1);
 		} else if (ev->button.button == SDL_BUTTON_MIDDLE)
 			paste_clipboard ();
 		break;
 	case SDL_MOUSEBUTTONUP:
-		if (ev->button.button == SDL_BUTTON_LEFT)
-			mouse_down = false;
-		break;
-	case SDL_MOUSEMOTION:
-		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK)) {
+		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
-			pixel_to_cell (ev->motion.x, ev->motion.y, &y, &x);
+			mouse_down = false;
+			drag_end ();
+			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
+			show_cursor (divider_cursor (layout_divider_at (y, x)));
+		}
+		break;
+	case SDL_MOUSEMOTION: {
+		size_t y, x;
+		pixel_to_cell (ev->motion.x, ev->motion.y, &y, &x);
+		if (drag_split != NULL) {
+			if (ev->motion.state & SDL_BUTTON_LMASK)
+				drag_to (y, x);
+			else
+				drag_end ();
+			break;
+		}
+		if (!mouse_down)
+			show_cursor (divider_cursor (layout_divider_at (y, x)));
+		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK)) {
 			if (y == mouse_y && x == mouse_x)
 				break;
 			mouse_y = y;
@@ -1273,6 +1370,7 @@ handle_event (const SDL_Event *ev)
 				queue_push (KBD_DRAG_MOUSE_1);
 		}
 		break;
+	}
 	case SDL_MOUSEWHEEL: {
 		float dy = ev->wheel.preciseY;
 		if (ev->wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
@@ -1300,6 +1398,8 @@ handle_event (const SDL_Event *ev)
 		case SDL_WINDOWEVENT_FOCUS_GAINED:
 		case SDL_WINDOWEVENT_FOCUS_LOST:
 			focused = ev->window.event == SDL_WINDOWEVENT_FOCUS_GAINED;
+			if (!focused)
+				drag_end ();
 			render ();
 			break;
 		case SDL_WINDOWEVENT_EXPOSED:

@@ -21,6 +21,15 @@
 
 WinNode *root_node = NULL;
 
+/* Counts splits and deletions, which may free nodes. */
+static unsigned long generation;
+
+unsigned long
+layout_generation (void)
+{
+	return generation;
+}
+
 WinNode *
 leaf_node_new (Window *wp)
 {
@@ -43,6 +52,18 @@ split_node_new (enum SplitKind kind, WinNode *left_or_top, WinNode *right_or_bot
 	return n;
 }
 
+/* The size of the first child of split `n', which is `total' cells. */
+static size_t
+first_size (const WinNode *n, size_t total)
+{
+	size_t d1 = (size_t) ((double) total * n->ratio);
+	if (d1 == 0 && total > 0)
+		d1 = 1;
+	if (d1 >= total && total > 1)
+		d1 = total - 1;
+	return d1;
+}
+
 static void
 winnode_layout (WinNode *n, size_t x, size_t y, size_t w, size_t h)
 {
@@ -54,22 +75,34 @@ winnode_layout (WinNode *n, size_t x, size_t y, size_t w, size_t h)
 		return;
 
 	if (n->kind == SPLIT_ROWS) {
-		size_t d1 = (size_t) ((double) h * n->ratio);
-		if (d1 == 0 && h > 0)
-			d1 = 1;
-		if (d1 >= h && h > 1)
-			d1 = h - 1;
+		size_t d1 = first_size (n, h);
 		winnode_layout (n->left_or_top, x, y, w, d1);
 		winnode_layout (n->right_or_bottom, x, y + d1, w, h - d1);
 	} else {
-		size_t d1 = (size_t) ((double) w * n->ratio);
-		if (d1 == 0 && w > 0)
-			d1 = 1;
-		if (d1 >= w && w > 1)
-			d1 = w - 1;
+		size_t d1 = first_size (n, w);
 		winnode_layout (n->left_or_top, x, y, d1, h);
 		winnode_layout (n->right_or_bottom, x + d1, y, w - d1, h);
 	}
+}
+
+static bool
+too_small (size_t w, size_t h)
+{
+	return h < 2 || w < 4;
+}
+
+/* Whether every window in `n' would be big enough at size `w' x `h'. */
+static bool
+winnode_fits (const WinNode *n, size_t w, size_t h)
+{
+	if (n->is_leaf)
+		return !too_small (w, h);
+	if (n->kind == SPLIT_ROWS) {
+		size_t d1 = first_size (n, h);
+		return winnode_fits (n->left_or_top, w, d1) && winnode_fits (n->right_or_bottom, w, h - d1);
+	}
+	size_t d1 = first_size (n, w);
+	return winnode_fits (n->left_or_top, d1, h) && winnode_fits (n->right_or_bottom, w - d1, h);
 }
 
 void
@@ -113,6 +146,7 @@ replace_child_local (WinNode *parent, WinNode *old_child, WinNode *new_child)
 void
 replace_leaf_with_split (WinNode *leaf, enum SplitKind kind, Window *w1, Window *w2)
 {
+	generation++;
 	WinNode *split = split_node_new (kind, leaf_node_new (w1), leaf_node_new (w2));
 
 	if (root_node == leaf)
@@ -128,6 +162,7 @@ remove_leaf_and_promote_sibling (WinNode *leaf)
 	if (root_node == leaf)
 		return;
 
+	generation++;
 	WinNode *parent = leaf->parent;
 	WinNode *sibling = parent->left_or_top == leaf ? parent->right_or_bottom : parent->left_or_top;
 
@@ -161,7 +196,7 @@ update_leaf_geometry (WinNode *leaf, void *data)
 
 	wp->eheight = wp->fheight > 0 ? wp->fheight - 1 : 0;
 
-	if (gd->too_small == NULL && (wp->fheight < 2 || wp->fwidth < 4))
+	if (gd->too_small == NULL && too_small (wp->fwidth, wp->fheight))
 		gd->too_small = wp;
 }
 
@@ -219,4 +254,60 @@ resize_window_layout (Window *wp, int delta, bool vertical)
 		split = split->parent;
 	}
 	return false;
+}
+
+static WinNode *
+winnode_divider_at (WinNode *n, size_t y, size_t x)
+{
+	if (n->is_leaf || y < n->y || y >= n->y + n->height || x < n->x || x >= n->x + n->width)
+		return NULL;
+	/* The divider is the status line, or the two separator columns,
+	   at the bottom or right edge of the first child. */
+	WinNode *first = n->left_or_top;
+	if (n->kind == SPLIT_ROWS
+	    ? y + 1 == first->y + first->height
+	    : x < first->x + first->width && x + 2 >= first->x + first->width)
+		return n;
+	WinNode *found = winnode_divider_at (first, y, x);
+	return found != NULL ? found : winnode_divider_at (n->right_or_bottom, y, x);
+}
+
+/* The split whose divider (a status line or separator between two
+   windows) is at row `y', column `x' of the screen, or NULL. */
+WinNode *
+layout_divider_at (size_t y, size_t x)
+{
+	return root_node != NULL ? winnode_divider_at (root_node, y, x) : NULL;
+}
+
+static bool
+split_fits (const WinNode *split, size_t size, size_t total)
+{
+	if (split->kind == SPLIT_ROWS)
+		return winnode_fits (split->left_or_top, split->width, size) &&
+			winnode_fits (split->right_or_bottom, split->width, total - size);
+	return winnode_fits (split->left_or_top, size, split->height) &&
+		winnode_fits (split->right_or_bottom, total - size, split->height);
+}
+
+/* Make the first child of `split' `size' cells high or wide, or as
+   near to that as no window becoming too small allows. Returns true
+   if the size changed; update_windows_geometry applies it. */
+bool
+layout_resize_split (WinNode *split, size_t size)
+{
+	size_t total = split->kind == SPLIT_ROWS ? split->height : split->width;
+	if (total < 2)
+		return false;
+	size_t cur = first_size (split, total);
+	size = MIN (MAX (size, 1), total - 1);
+	/* Window sizes only grow with their split's size, so the sizes
+	   that fit are a range, and the current size should be in it. */
+	while (size != cur && !split_fits (split, size, total))
+		size = size < cur ? size + 1 : size - 1;
+	if (size == cur)
+		return false;
+	/* Half a cell over, so that first_size rounds down to `size'. */
+	split->ratio = ((double) size + 0.5) / (double) total;
+	return true;
 }

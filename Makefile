@@ -111,6 +111,7 @@ GUI_CFLAGS = `$(PKG_CONFIG) --cflags sdl2 SDL2_ttf`
 GUI_LIBS = `$(PKG_CONFIG) --libs sdl2 SDL2_ttf` -lm
 
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o
+LAYOUT_TEST_OBJS = src/layout-test.o src/layout.o src/estr.o src/util.o
 
 DOCS = AUTHORS FAQ NEWS README.md src/dotzile.sample
 
@@ -119,7 +120,7 @@ all: src/xzile src/dotzile.sample
 src/xzile: $(OBJS)
 	$(CC) $(PTHREAD_FLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
 
-$(OBJS) src/gui.o src/estr-test.o: src/xzile.h
+$(OBJS) src/gui.o src/estr-test.o src/layout-test.o: src/xzile.h
 src/screen.o src/term.o src/gui.o: src/screen.h
 
 gui: src/xzile-gui
@@ -145,8 +146,12 @@ src/dotzile.sample: src/mkdotzile
 src/estr-test: $(ESTR_TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(ESTR_TEST_OBJS) $(LIBS)
 
-check: src/xzile src/estr-test
+src/layout-test: $(LAYOUT_TEST_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(LAYOUT_TEST_OBJS) $(LIBS)
+
+check: src/xzile src/estr-test src/layout-test
 	src/estr-test
+	src/layout-test
 	XZILE=src/xzile sh tests/run-tests.sh
 
 install: all
@@ -174,7 +179,7 @@ uninstall:
 	rm -rf $(DESTDIR)$(docdir)
 
 clean:
-	rm -f src/*.o src/xzile src/xzile-gui src/estr-test src/mkdotzile src/dotzile.sample
+	rm -f src/*.o src/xzile src/xzile-gui src/estr-test src/layout-test src/mkdotzile src/dotzile.sample
 	rm -rf XZile.app
 
 .PHONY: all gui check install install-gui app uninstall clean

@@ -56,6 +56,8 @@ What the window adds to the terminal editor:
   `M-x load-theme`. The `cursor` face sets the cursor colour.
 - Click to move point and select a window, drag to select, and scroll
   the window under the pointer with the wheel.
+- Drag a status bar, or the border between side-by-side windows, to
+  resize them.
 - Kills and yanks use the system clipboard; middle-click pastes.
 - Command (macOS) or Super shortcuts: ⌘C copy, ⌘X cut, ⌘V paste,
   ⌘Z undo, ⌘S save, ⌘O open, ⌘F search, ⌘A select all, ⌘W close

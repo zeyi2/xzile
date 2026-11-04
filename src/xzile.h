@@ -793,6 +793,9 @@ void replace_leaf_with_split (WinNode *leaf, enum SplitKind kind, Window *w1, Wi
 void remove_leaf_and_promote_sibling (WinNode *leaf);
 Window *update_windows_geometry (size_t x, size_t y, size_t w, size_t h);
 bool resize_window_layout (Window *wp, int delta, bool vertical);
+unsigned long layout_generation (void);
+WinNode *layout_divider_at (size_t y, size_t x);
+bool layout_resize_split (WinNode *split, size_t size);
 
 /* redisplay.c */
 size_t get_main_window_height (void);
