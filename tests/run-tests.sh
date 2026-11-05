@@ -19,12 +19,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-# Usage: run-tests.sh [TEST.el...]
+# Usage: run-tests.sh [TEST.el|TEST.test...]
 #
 # With no arguments, run the whole suite. Each test copies an input
 # file, edits it with the commands in TEST.el, and compares the result
 # with TEST.output. The editor must exit successfully and print nothing
-# on stderr. Set XZILE to the editor to test (default: src/xzile).
+# on stderr. A TEST.test is a shell script that runs the editor itself,
+# given in $XZILE; it prints why if it fails. Set XZILE to the editor
+# to test (default: src/xzile).
 #
 # N.B. Tests that use execute-kbd-macro must note that keyboard input
 # is only evaluated once the script has finished running.
@@ -135,6 +137,19 @@ run_remote_tests () {
 
 run_list () {
 	for t in "$@"; do
+		case $t in
+		*.test)
+			errors=$(XZILE=$editor sh "$t" 2>&1)
+			if [ $? -eq 0 ]; then
+				pass=$((pass + 1))
+			else
+				echo "FAIL: ${t#"$srcdir"/tests/}:"
+				printf '%s\n' "$errors"
+				fail=$((fail + 1))
+			fi
+			continue
+			;;
+		esac
 		if run_test "$t"; then
 			pass=$((pass + 1))
 		else
@@ -153,7 +168,7 @@ if [ $# -gt 0 ]; then
 else
 	run_list "$srcdir"/tests/*.el "$srcdir"/tests/interactive/*.el \
 		"$srcdir"/tests/regression/*.el "$srcdir"/tests/zile-only/*.el \
-		"$srcdir"/tests/zile-only/interactive/*.el
+		"$srcdir"/tests/zile-only/interactive/*.el "$srcdir"/tests/zile-only/*.test
 
 	# These depend on the screen size.
 	COLUMNS=80 LINES=24

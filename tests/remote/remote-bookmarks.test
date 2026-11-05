@@ -1,0 +1,86 @@
+#!/bin/sh
+# Bookmarks of remote files and directories survive restarts
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE, XZ_FIXTURE (the SSH server's
+# directory) and XZ_REMOTE_HOME set. Each step is a separate editor
+# process with HOME set to a fresh directory. Prints why on failure.
+
+set -u
+
+fx=$XZ_FIXTURE
+rhome=$XZ_REMOTE_HOME
+port2=$(cat "$fx/port2")
+me=$(id -un)
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-rbookmarks.XXXXXX") || exit 1
+trap 'rm -rf "$work"; rm -rf "$rhome/bm"' EXIT
+H=$work/home
+mkdir "$H"
+printf '(setq ssh-config-file "%s/ssh_config")\n' "$fx" > "$H/.xzile"
+state=$H/.xzile.d/bookmarks
+log=$work/debug.log
+
+fail () {
+	printf '%s\n' "$*"
+	[ -f "$state" ] && { echo "--- $state:"; cat "$state"; }
+	[ -f "$log" ] && { echo "--- debug log:"; cat "$log"; }
+	exit 1
+}
+
+rm -rf "$rhome/bm"
+mkdir "$rhome/bm"
+printf 'one\ntwo\n' > "$rhome/bm/f.txt"
+
+# Run the editor on out.txt with the keys `$1' (a Lisp string body),
+# then save out.txt and quit.
+run () {
+	: > "$work/out.txt"
+	printf '(execute-kbd-macro "%s\\C-xbout.txt\\r\\C-x\\C-s\\C-x\\C-c")\n' "$1" > "$work/keys.el"
+	rm -f "$log"
+	errors=$(cd "$work" && HOME=$H XZILE_DEBUG=bookmark XZILE_DEBUG_LOG=$log \
+		"$XZILE" out.txt --load "$work/keys.el" </dev/null 2>&1 >/dev/null)
+	status=$?
+	[ $status -eq 0 ] || fail "exit status $status: $errors"
+	[ -z "$errors" ] || fail "output on stderr: $errors"
+}
+
+# 1. Bookmark a remote file at `two', the same file through a
+# connection with an explicit user and port, and a remote Dired.
+run "\\C-x\\C-f\\M-lxztest\\rbm/f.txt\\r\\C-n\\C-xrmrfile\\r\
+\\C-x\\C-f\\M-lNew SSH\\rxztest\\r$me\\r$port2\\rbm/f.txt\\r\\C-xrmrport\\r\
+\\C-xd\\M-lxztest\\r\\C-a\\C-k$rhome/bm\\r\\C-xrmrdir\\r"
+printf 'xzile-bookmarks 1\n' > "$work/expected"
+printf 'dir\trdir\tssh:xztest\t%s/bm\t' "$rhome" >> "$work/expected"
+head -c "$(wc -c < "$work/expected")" "$state" | cmp -s - "$work/expected" || fail "step 1: wrong rdir record"
+grep -q -x "file	rfile	ssh:xztest	$rhome/bm/f.txt	4" "$state" || fail "step 1: wrong rfile record"
+grep -q -x "file	rport	ssh:$me@xztest:$port2	$rhome/bm/f.txt	0" "$state" || fail "step 1: wrong rport record"
+[ "$(wc -l < "$state")" -eq 4 ] || fail "step 1: wrong number of records"
+
+# 2. A new process jumps to each over SSH; the list shows where.
+copy='\C-@\C-e\M-w\C-xbout.txt\r\C-y\r'
+run "\\C-xrbrfile\\r$copy\\C-xrbrport\\r$copy\\C-xrbrdir\\r\\C-xbout.txt\\r\\C-xrl\\M-<\\C-n\\C-a\\C-@\\M->\\M-w\\C-xbout.txt\\r\\C-y"
+printf 'two\none\n  rdir      ssh:xztest:%s/bm/\n  rfile     ssh:xztest:%s/bm/f.txt\n  rport     ssh:%s@xztest:%s:%s/bm/f.txt\n' \
+	"$rhome" "$rhome" "$me" "$port2" "$rhome" > "$work/expected"
+cmp -s "$work/expected" "$work/out.txt" || fail "step 2: out.txt is:
+$(cat "$work/out.txt")
+--- expected:
+$(cat "$work/expected")"
+grep -F -q "jumped to \`rdir'" "$log" || fail "step 2: no jump to rdir"
+exit 0

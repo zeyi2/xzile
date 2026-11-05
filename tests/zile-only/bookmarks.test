@@ -1,0 +1,312 @@
+#!/bin/sh
+# Bookmarks survive restarts, in ~/.xzile.d/bookmarks
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. Each step is a separate editor
+# process with HOME set to a fresh directory, so that the user's own
+# bookmarks are never read or written. Prints why on failure.
+
+set -u
+
+real_home=$HOME
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-bookmarks.XXXXXX") || exit 1
+trap 'chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"' EXIT
+H=$work/home
+mkdir -p "$H/docs"
+state=$H/.xzile.d/bookmarks
+log=$work/debug.log
+
+fail () {
+	printf '%s\n' "$*"
+	[ -f "$state" ] && { echo "--- $state:"; cat "$state"; }
+	[ -f "$log" ] && { echo "--- debug log:"; cat "$log"; }
+	exit 1
+}
+
+real_before=$(ls -ld --full-time "$real_home/.xzile.d/bookmarks" 2>&1)
+
+printf 'alpha\nbeta \303\274n\303\257\ngamma\n' > "$H/docs/a.txt"
+# A directory whose name has a tab and a newline.
+odd=$(printf '%s/docs/t\tab\nnl' "$H")
+mkdir "$odd"
+echo 'in tab dir' > "$odd/f.txt"
+
+# Run the editor on out.txt with the Lisp on standard input, then save
+# out.txt and quit. Arguments go before the file.
+run () {
+	cat > "$work/keys.el"
+	printf '(execute-kbd-macro "\\C-xbout.txt\\r\\C-x\\C-s\\C-x\\C-c")\n' >> "$work/keys.el"
+	: > "$work/out.txt"
+	rm -f "$log"
+	errors=$(cd "$work" && HOME=$H XZILE_DEBUG=bookmark XZILE_DEBUG_LOG=$log \
+		"$XZILE" "$@" out.txt --load "$work/keys.el" </dev/null 2>&1 >/dev/null)
+	status=$?
+	[ $status -eq 0 ] || fail "exit status $status: $errors"
+	[ -z "$errors" ] || fail "output on stderr: $errors"
+}
+
+expect_out () {
+	printf '%s\n' "$1" | cmp -s - "$work/out.txt" || fail "$2: out.txt is:
+$(cat "$work/out.txt")
+--- expected:
+$1"
+}
+
+expect_log () {
+	grep -F -q -- "$1" "$log" || fail "$2: debug log lacks: $1"
+}
+
+# The record of `name' in the file, with the point given as P.
+record () {
+	printf '%s\t%s\tlocal\t%s\t%s' "$1" "$2" "$3" "$4"
+}
+
+# 1. Set bookmarks: the default name (the file's) after `beta ', a
+# name with UTF-8 and a backslash, one in the odd directory (reached
+# by completing its name with TAB), and one in Dired; then list them.
+run <<'EOF'
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-n\C-f\C-f\C-f\C-f\C-f\C-xrm\r")
+(execute-kbd-macro "\C-n\C-a\C-f\C-f\C-xrmnaïve ✓ \\ back\r")
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/t\tf.txt\r\C-f\C-f\C-f\C-xrmodd\r")
+(dired "~/docs")
+(execute-kbd-macro "\C-xrm\r\C-xrl\C-xh\M-w\C-xbout.txt\r\C-y")
+EOF
+expect_out "Bookmarks: 4, saved in ~/.xzile.d/bookmarks
+RET: jump  n/p: move  d: flag  u: unflag  x: delete flagged  r: rename  g: reread  q: quit
+  Bookmark        Location
+  a.txt           ~/docs/a.txt
+  docs            ~/docs/
+  naïve ✓ \\ back  ~/docs/a.txt
+  odd             ~/docs/t\\tab\\nnl/f.txt" "step 1"
+expect_log "Bookmark \`naïve ✓ \\ back' set" "step 1"
+[ "$(sed -n 1p "$state")" = "xzile-bookmarks 1" ] || fail "step 1: wrong header"
+[ "$(sed -n 2p "$state")" = "$(record file a.txt "$H/docs/a.txt" 11)" ] || fail "step 1: wrong a.txt record"
+sed -n 3p "$state" | grep -q "^dir	docs	local	$H/docs	[0-9][0-9]*\$" || fail "step 1: wrong docs record"
+[ "$(sed -n 4p "$state")" = "$(record file 'naïve ✓ \\ back' "$H/docs/a.txt" 19)" ] ||
+	fail "step 1: wrong naïve record"
+[ "$(sed -n 5p "$state")" = "$(record file odd "$H/docs/t\\tab\\nnl/f.txt" 3)" ] || fail "step 1: wrong odd record"
+[ "$(wc -l < "$state")" -eq 5 ] || fail "step 1: wrong number of records"
+[ "$(stat -c %a "$H/.xzile.d")" = 700 ] || fail "step 1: ~/.xzile.d is not private"
+[ "$(stat -c %a "$state")" = 600 ] || fail "step 1: the bookmarks file is not private"
+[ "$(stat -c %a "$state.lock")" = 600 ] || fail "step 1: the lock file is not private"
+[ -z "$(ls -A "$H/.xzile.d" | grep '^bookmarks' | grep -v -x -e bookmarks -e bookmarks.lock)" ] ||
+	fail "step 1: stray files in ~/.xzile.d: $(ls -A "$H/.xzile.d")"
+
+# 2. A new process has them all: C-x r b jumps to each, and the text
+# from point to the end of the line is copied (Dired: the file name).
+copy='\C-@\C-e\M-w\C-xbout.txt\r\C-y\r'
+run <<EOF
+(execute-kbd-macro "\\C-xrba.txt\\r$copy\\C-xrbnaïve\\r$copy\\C-xrbodd\\r$copy")
+(execute-kbd-macro "\\C-xrbdocs\\rw\\C-xbout.txt\\r\\C-y\\r")
+EOF
+expect_out "ünï
+mma
+tab dir
+a.txt" "step 2"
+expect_log "4 bookmarks loaded" "step 2"
+
+# 3. Setting a name again replaces it; a stale point past the end, or
+# inside a character, is moved back into the text.
+printf 'in' > "$odd/f.txt"
+awk 'BEGIN { FS = OFS = "\t" } NR == 4 { $5 = 12 } { print }' "$state" > "$work/edited" && cp "$work/edited" "$state"
+run <<EOF
+(execute-kbd-macro "\\C-x\\C-f\\C-a\\C-k~/docs/a.txt\\r\\M-<\\C-xrma.txt\\r")
+(execute-kbd-macro "\\C-xrbodd\\r\\C-@\\C-a\\M-w\\C-xbout.txt\\r\\C-y\\r\\C-xrbnaïve\\r$copy")
+EOF
+expect_out "in
+ünï" "step 3"
+expect_log "Bookmark \`a.txt' replaced" "step 3"
+expect_log "jumped to \`odd' at 2 (saved at 3)" "step 3"
+expect_log "jumped to \`naïve ✓ \\ back' at 11 (saved at 12)" "step 3"
+[ "$(sed -n 2p "$state")" = "$(record file a.txt "$H/docs/a.txt" 0)" ] || fail "step 3: a.txt not replaced"
+[ "$(wc -l < "$state")" -eq 5 ] || fail "step 3: wrong number of records"
+
+# 4. In the list: n d d p u flags docs only, x deletes it; r renames
+# odd (point follows it); renaming a.txt to an existing name is
+# refused; g shows what another session added; RET jumps to a.txt.
+run <<'EOF'
+(execute-kbd-macro "\C-xrlnddpux")
+(execute-kbd-macro "rb-renamed\r")
+(execute-kbd-macro "pr\C-a\C-knaïve ✓ \\ back\r")
+(execute-kbd-macro "\M-!printf 'file\\011extern\\011local\\011%s/docs/a.txt\\0116\\n' ~ >> ~/.xzile.d/bookmarks\rg")
+(execute-kbd-macro "\C-xh\M-w\C-xbout.txt\r\C-y\C-xb*Bookmark List*\r\M-<n\r")
+(execute-kbd-macro "\C-@\C-e\M-w\C-xbout.txt\r\C-y\r")
+EOF
+expect_out "Bookmarks: 4, saved in ~/.xzile.d/bookmarks
+RET: jump  n/p: move  d: flag  u: unflag  x: delete flagged  r: rename  g: reread  q: quit
+  Bookmark        Location
+  a.txt           ~/docs/a.txt
+  b-renamed       ~/docs/t\\tab\\nnl/f.txt
+  extern          ~/docs/a.txt
+  naïve ✓ \\ back  ~/docs/a.txt
+alpha" "step 4"
+expect_log "Deleted 1 bookmark" "step 4"
+expect_log "Renamed bookmark \`odd' to \`b-renamed'" "step 4"
+expect_log "A bookmark named \`naïve ✓ \\ back' already exists" "step 4"
+grep -q '^dir' "$state" && fail "step 4: docs not deleted"
+[ "$(sed -n 3p "$state")" = "$(record file b-renamed "$H/docs/t\\tab\\nnl/f.txt" 3)" ] || fail "step 4: not renamed"
+[ "$(wc -l < "$state")" -eq 5 ] || fail "step 4: wrong number of records"
+
+# 5. Malformed records are ignored (and dropped on the next save);
+# M-x bookmark-delete and bookmark-rename work by name.
+{
+	cat "$state"
+	printf 'file\tno-point\tlocal\t/x\n'
+	printf 'file\trelative\tlocal\tx\t1\n'
+	printf 'file\tbad\\qescape\tlocal\t/x\t1\n'
+	printf 'file\tnegative\tlocal\t/x\t-1\n'
+	printf 'link\tunknown-kind\tlocal\t/x\t1\n'
+	printf 'file\tbad-host\tssh:-oProxyCommand=evil\t/x\t1\n'
+	printf 'file\tctl\001name\tlocal\t/x\t1\n'
+	printf 'file\ta.txt\tlocal\t/duplicate\t1\n'
+} > "$work/edited" && cp "$work/edited" "$state"
+run <<'EOF'
+(bookmark-delete "extern")
+(execute-kbd-macro "\M-xbookmark-rename\rb-renamed\r\C-a\C-kodd\r")
+EOF
+expect_log "ignored line 7" "step 5"
+expect_log "Deleted bookmark \`extern'" "step 5"
+grep -q -e 'no-point' -e relative -e escape -e negative -e unknown -e evil -e ctl -e duplicate "$state" &&
+	fail "step 5: malformed records kept"
+[ "$(cut -f2 "$state" | tr '\n' ' ')" = "xzile-bookmarks 1 a.txt naïve ✓ \\\\ back odd " ] || fail "step 5: wrong records"
+
+# 6. With -q the file is neither read nor written, but bookmarks work
+# within the session; bookmark-save refuses.
+cp "$state" "$work/before"
+run -q <<'EOF'
+(execute-kbd-macro "\C-xrb")
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\M->\C-xrmsession\r\M-<\C-xrbsession\r\C-p\C-@\C-e\M-w")
+(bookmark-save)
+(execute-kbd-macro "\C-xbout.txt\r\C-y\r\C-xrl\M-<\C-@\C-e\M-w\C-xbout.txt\r\C-y\r")
+EOF
+expect_out "gamma
+Bookmarks: 1, kept for this session only (-q)" "step 6"
+expect_log "No bookmarks: C-x r m sets one" "step 6"
+expect_log "Bookmark \`session' set" "step 6"
+cmp -s "$work/before" "$state" || fail "step 6: -q changed the bookmarks file"
+grep -F -q "bookmarks loaded" "$log" && fail "step 6: -q read the bookmarks file"
+
+# 7. Buffers that are not of a file or directory are refused.
+run <<'EOF'
+(switch-to-buffer "*scratch*")
+(bookmark-set "scratch")
+EOF
+expect_log "Cannot bookmark \`*scratch*': it is not visiting a file or directory" "step 7"
+cmp -s "$work/before" "$state" || fail "step 7: a refused bookmark changed the file"
+
+# 8. A failure to save is reported, and the change kept in the session:
+# the bookmark can be used, and is saved by the next save that works
+# (here M-x bookmark-save, once ~/.xzile.d is writable again).
+if [ "$(id -u)" -ne 0 ]; then
+	chmod 500 "$H/.xzile.d"
+	run <<'EOF'
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-n\C-xrmunsaved\r\M-<\C-xrbunsaved\r\C-@\C-e\M-w\C-xbout.txt\r\C-y\r")
+(execute-kbd-macro "\C-xrl\M-<\C-@\C-e\M-w\C-xbout.txt\r\C-y\r")
+(execute-kbd-macro "\M-!chmod 700 ~/.xzile.d\r\M-xbookmark-save\r")
+EOF
+	expect_out "beta ünï
+Bookmarks: 4, changes not saved: cannot write ~/.xzile.d/bookmarks: Permission denied (M-x bookmark-save retries)" "step 8"
+	expect_log "Bookmark \`unsaved' set, but not saved: cannot write ~/.xzile.d/bookmarks: Permission denied" "step 8"
+	expect_log "Saved 4 bookmarks in ~/.xzile.d/bookmarks" "step 8"
+	[ "$(sed -n 5p "$state")" = "$(record file unsaved "$H/docs/a.txt" 6)" ] || fail "step 8: unsaved bookmark not saved later"
+fi
+
+# 9. A file of another version, or one that cannot be read, is left
+# alone: not loaded, and not replaced by later changes.
+cp "$state" "$work/good"
+printf 'xzile-bookmarks 2\nfuture\trecord\n' > "$state"
+cp "$state" "$work/before"
+run <<'EOF'
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-xrmnew\r")
+EOF
+expect_log "Warning: bookmarks not loaded: ~/.xzile.d/bookmarks is of another version of the format" "step 9"
+expect_log "Bookmark \`new' set, but not saved: ~/.xzile.d/bookmarks is of another version of the format" "step 9"
+cmp -s "$work/before" "$state" || fail "step 9: a file of another version was replaced"
+if [ "$(id -u)" -ne 0 ]; then
+	cp "$work/good" "$state"
+	chmod 000 "$state"
+	run <<'EOF'
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-xrmnew\r")
+EOF
+	chmod 600 "$state"
+	expect_log "Bookmark \`new' set, but not saved: ~/.xzile.d/bookmarks is unreadable" "step 9"
+	cmp -s "$work/good" "$state" || fail "step 9: an unreadable file was replaced"
+fi
+cp "$work/good" "$state"
+
+# 10. Each change is made in what the file holds when it is made: a
+# bookmark saved by another session after this one started is kept.
+run <<'EOF'
+(execute-kbd-macro "\M-!printf 'file\\011other\\011local\\011%s/docs/a.txt\\0110\\n' ~ >> ~/.xzile.d/bookmarks\r")
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-xrmmine\r")
+EOF
+grep -q "^file	other	" "$state" || fail "step 10: the other session's bookmark was lost"
+grep -q "^file	mine	" "$state" || fail "step 10: this session's bookmark was lost"
+
+# 11. Another process holding the lock on bookmarks.lock (with fcntl,
+# through Python's lockf) for longer than the editor waits (2 seconds):
+# the editor reports that it could not save and leaves the file alone.
+if command -v python3 >/dev/null 2>&1; then
+	cp "$state" "$work/before"
+	rm -f "$work/ready"
+	python3 - "$state.lock" "$work/ready" <<'PY' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.lockf(fd, fcntl.LOCK_EX)
+open(sys.argv[2], 'w').close()
+time.sleep(4)
+PY
+	holder=$!
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+		[ -e "$work/ready" ] && break
+		sleep 0.1
+	done
+	[ -e "$work/ready" ] || fail "step 11: the lock holder did not start"
+	run <<'EOF'
+(execute-kbd-macro "\C-x\C-f\C-a\C-k~/docs/a.txt\r\C-xrmlocked\r")
+EOF
+	wait "$holder"
+	expect_log "Bookmark \`locked' set, but not saved: another session kept ~/.xzile.d/bookmarks locked" "step 11"
+	cmp -s "$work/before" "$state" || fail "step 11: the file changed without the lock"
+fi
+
+# 12. A buffer of the user's own named *Bookmark List* is left alone:
+# the list is refused, and the buffer keeps its text and keys.
+run <<'EOF2'
+(execute-kbd-macro "\C-xb*Bookmark List*\ruser text\r\C-xrlmore\C-xh\M-w\C-xbout.txt\r\C-y")
+EOF2
+expect_out "user text
+more" "step 12"
+expect_log "Cannot list bookmarks: a buffer named \`*Bookmark List*' already exists" "step 12"
+
+# 13. Bookmarks set by ~/.xzile are saved, along with those loaded.
+printf '(find-file "%s/docs/a.txt")\n(bookmark-set "from-init")\n' "$H" > "$H/.xzile"
+run <<'EOF2'
+(execute-kbd-macro "\C-xrbfrom-init\r\C-@\C-e\M-w\C-xbout.txt\r\C-y\r\C-xrbmine\r")
+EOF2
+rm "$H/.xzile"
+expect_out "alpha" "step 13"
+expect_log "Bookmark \`from-init' set" "step 13"
+expect_log "jumped to \`mine'" "step 13"
+[ "$(grep -c -e "^file	from-init	local	$H/docs/a.txt	0\$" -e "^file	mine	" "$state")" -eq 2 ] ||
+	fail "step 13: bookmarks lost"
+
+[ "$(ls -ld --full-time "$real_home/.xzile.d/bookmarks" 2>&1)" = "$real_before" ] ||
+	fail "the real home directory's bookmarks changed"
+exit 0

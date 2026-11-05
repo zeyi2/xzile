@@ -1208,6 +1208,10 @@ void html_after_visit (Buffer *bp);
 void html_free (Buffer *bp);
 void html_mode_init (void);
 
+/* bookmark.c */
+void bookmarks_load (void);
+void bookmark_init (void);
+
 void search_init (void);
 void shell_init (void);
 void registers_init (void);

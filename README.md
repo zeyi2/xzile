@@ -266,6 +266,42 @@ Each operation can be cancelled with `C-g`, and is abandoned after
 `remote-timeout` seconds (30). The remote machine needs a POSIX shell
 with `cat`, `cksum`, `ls` and `mktemp`.
 
+### Bookmarks
+
+A bookmark names a place to come back to: a file, or a directory in
+Dired, local or remote, with the position of point there.
+
+- `C-x r m` (`bookmark-set`) sets one at point. The name defaults
+  to the file's (or directory's) name; setting a name again replaces
+  it. Buffers that do not visit a file or directory, and previews,
+  are refused.
+- `C-x r b` (`bookmark-jump`) chooses one and goes there. A point
+  past the end of the text, or inside a character, is moved back.
+- `C-x r l` (`list-bookmarks` or `bookmark-bmenu-list`) shows
+  `*Bookmark List*`: `RET` goes to the bookmark on the line, `n` and
+  `p` move, `d` flags it for deletion and `u` unflags it, `x`
+  deletes those flagged, `r` renames, `g` rereads the file and `q`
+  quits.
+- `M-x bookmark-delete`, `bookmark-rename` and `bookmark-save` do
+  the same by name; `bookmark-save` retries a save that failed.
+
+Bookmarks are saved in `~/.xzile.d/bookmarks` as soon as they are
+set, renamed or deleted, in the same way as locations above (private
+directory, mode 600, lock, read again and renamed over). The first
+line is `xzile-bookmarks 1`, then one record per line, sorted by
+name, with the same escapes:
+
+    file|dir    NAME    local|ssh:[USER@]HOST[:PORT]    PATH    POINT
+
+A save that fails is reported, and the change kept for the session
+until a later save works. A file of another version, or one that
+cannot be read, is not loaded and is left alone. With `-q`
+(`--no-init-file`) the file is neither read nor written, but
+bookmarks work within the session.
+Points are byte offsets: a bookmark does not follow its text when the
+file is edited elsewhere. Jumping to a remote bookmark connects to its
+machine as `C-x C-f` does.
+
 ---
 
 ## Reporting bugs

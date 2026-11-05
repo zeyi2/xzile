@@ -55,6 +55,7 @@ ALL_CFLAGS = $(ZILE_CPPFLAGS) $(CPPFLAGS) $(WARN_CFLAGS) $(PTHREAD_FLAGS) $(CFLA
 CORE_OBJS = \
 	src/basic.o \
 	src/bind.o \
+	src/bookmark.o \
 	src/buffer.o \
 	src/clipboard.o \
 	src/compile.o \

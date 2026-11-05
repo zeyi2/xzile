@@ -356,6 +356,7 @@ main (int argc, char **argv)
 	init_variables ();
 	basic_init ();
 	bind_init ();
+	bookmark_init ();
 	dired_init ();
 	terminal_init ();
 	compile_init ();
@@ -406,6 +407,7 @@ main (int argc, char **argv)
 	init_default_bindings ();
 
 	if (!qflag) {
+		bookmarks_load ();
 		char *home = get_home_dir ();
 		char *init_file = path_join (home, "." PACKAGE);
 		lisp_loadfile (init_file);
