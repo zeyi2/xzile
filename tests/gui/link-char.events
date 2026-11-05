@@ -1,0 +1,52 @@
+# Clicks on FILE:LINE:COL references in a terminal in char mode: the
+# first splits the sole window, showing the file on the left at the
+# place; the second reference on the line opens there too. A click
+# beside the references and one on a blank cell do nothing; a drag that
+# starts on a reference leaves the place it opens alone.
+down x alt
+text x
+up x alt
+sleep 200
+text term
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text sh -c "printf '%s:3:2 x %s:5:1
+text \n' link-char.txt link-char.txt;
+text  read x"
+down Return
+sleep 1000
+click 0 3
+sleep 300
+text A
+sleep 300
+# The terminal is now in the right half, from column 50.
+click 0 75
+sleep 300
+text B
+sleep 300
+click 0 68
+sleep 300
+text z
+sleep 300
+press 0 52
+sleep 100
+drag 1 5
+sleep 100
+drag 1 8
+sleep 100
+release 1 8
+sleep 300
+text C
+sleep 300
+click 10 60
+sleep 300
+text z
+sleep 300
+# On the left, the file.
+click 0 0
+sleep 300
+text L

@@ -1484,6 +1484,37 @@ F_dired_find_file_other_window (long uniarg, Args *args)
 	return ok;
 }
 
+/* A click at `o', on the line of point in the current Dired buffer:
+   on the name of a directory, list it in this window; on the name of a
+   file, visit it in another one (see window_for_link), keeping the
+   listing in view. Elsewhere, nothing is done, and false returned. */
+bool
+dired_follow_link (size_t o)
+{
+	Buffer *bp = cur_bp;
+	size_t lo = buffer_start_of_line (bp, o);
+	char *name = line_entry (bp, lo);
+	if (name == NULL)
+		return false;
+	size_t start = lo + bp->dired->name_col, end = start + strlen (name);
+	free (name);
+	if (o < start || o >= end)
+		return false;
+
+	Remote *r = bp->remote;
+	bool dir = line_is_dir (bp);
+	char *path = current_path ();
+	if (path == NULL)
+		return true;
+	/* A symbolic link to a directory is listed like one. */
+	if (!dir)
+		find_file_for_link (cur_wp, r, path, &dir);
+	if (dir)
+		visit (r, path, true);
+	free (path);
+	return true;
+}
+
 static bool
 F_dired_view_file (long uniarg, Args *args)
 {

@@ -371,49 +371,62 @@ estr_from_strbuf (StrBuf *sb)
 	return es;
 }
 
+/* The buffer visiting `path' (absolute) on `r', read if need be,
+   without showing it; `*kind' says what `path' is there. NULL for a
+   directory or an error, and for a missing file unless `create'. */
+static Buffer *
+remote_file_buffer (Remote *r, const char *path, bool create, enum RemoteKind *kind)
+{
+	*kind = REMOTE_FILE;
+	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
+		if (bp->remote == r && bp->remote_path != NULL && strcmp (bp->remote_path, path) == 0)
+			return bp;
+
+	StrBuf content;
+	sb_init (&content);
+	bool writable = true;
+	*kind = remote_read (r, path, &content, &writable);
+	if (*kind == REMOTE_ERROR || *kind == REMOTE_DIR || (*kind == REMOTE_MISSING && !create)) {
+		sb_free (&content);
+		return NULL;
+	}
+
+	Buffer *bp;
+	char *sum = NULL;
+	if (*kind == REMOTE_FILE) {
+		sum = remote_checksum (content.s, content.len);
+		bp = buffer_new (estr_from_strbuf (&content));
+		bp->readonly = !writable;
+	} else {
+		sb_free (&content);
+		bp = buffer_new (NULL);
+	}
+	bp->remote = r;
+	bp->remote_path = xstrdup (path);
+	bp->remote_sum = sum;
+	char *base = path_basename (path);
+	bp->name = buffer_unique_name (base);
+	free (base);
+	buffer_set_highlighter (bp, filetype_resolve_highlighter (path));
+	undo_free_all (bp);
+	bp->modified = false;
+	if (*kind == REMOTE_MISSING)
+		minibuf_write ("(New file on ssh:%s)", remote_label (r));
+	return bp;
+}
+
 /* Visit the file or directory `path' (absolute) on `r'. A failure
    leaves everything as it was: nothing local is used instead. */
 bool
 find_file_remote (Remote *r, const char *path)
 {
-	Buffer *bp;
-	for (bp = head_bp; bp != NULL; bp = bp->next)
-		if (bp->remote == r && bp->remote_path != NULL && strcmp (bp->remote_path, path) == 0)
-			break;
-
+	enum RemoteKind kind;
+	Buffer *bp = remote_file_buffer (r, path, true, &kind);
 	if (bp == NULL) {
-		StrBuf content;
-		sb_init (&content);
-		bool writable = true;
-		enum RemoteKind kind = remote_read (r, path, &content, &writable);
-		if (kind == REMOTE_ERROR || kind == REMOTE_DIR) {
-			sb_free (&content);
-			if (kind == REMOTE_DIR)
-				return dired_remote (r, path);
-			minibuf_error ("%s", remote_last_error ());
-			return false;
-		}
-
-		char *sum = NULL;
-		if (kind == REMOTE_FILE) {
-			sum = remote_checksum (content.s, content.len);
-			bp = buffer_new (estr_from_strbuf (&content));
-			bp->readonly = !writable;
-		} else {
-			sb_free (&content);
-			bp = buffer_new (NULL);
-		}
-		bp->remote = r;
-		bp->remote_path = xstrdup (path);
-		bp->remote_sum = sum;
-		char *base = path_basename (path);
-		bp->name = buffer_unique_name (base);
-		free (base);
-		buffer_set_highlighter (bp, filetype_resolve_highlighter (path));
-		undo_free_all (bp);
-		bp->modified = false;
-		if (kind == REMOTE_MISSING)
-			minibuf_write ("(New file on ssh:%s)", remote_label (r));
+		if (kind == REMOTE_DIR)
+			return dired_remote (r, path);
+		minibuf_error ("%s", remote_last_error ());
+		return false;
 	}
 
 	buffer_switch_to (bp, true);
@@ -422,6 +435,45 @@ find_file_remote (Remote *r, const char *path)
 	location_note (r, dir);
 	free (dir);
 	return true;
+}
+
+/* Visit the existing file `path' (absolute), on `r' unless it is NULL,
+   for a link followed in the current window `from': in the window
+   that window_for_link gives, which is selected. Nothing changes if
+   the file cannot be read, having said why, or if it is a directory,
+   which sets `*is_dir'. */
+bool
+find_file_for_link (Window *from, Remote *r, const char *path, bool *is_dir)
+{
+	*is_dir = false;
+	Buffer *bp = NULL;
+	if (r != NULL) {
+		enum RemoteKind kind;
+		bp = remote_file_buffer (r, path, false, &kind);
+		if (bp == NULL) {
+			if (kind == REMOTE_DIR)
+				*is_dir = true;
+			else if (kind == REMOTE_MISSING)
+				minibuf_error ("%s on ssh:%s: No such file", path, remote_label (r));
+			else
+				minibuf_error ("%s", remote_last_error ());
+			return false;
+		}
+	} else {
+		if (file_is_dir (path)) {
+			*is_dir = true;
+			return false;
+		}
+		if (!file_is_regular (path)) {
+			minibuf_error ("%s: No such file", path);
+			return false;
+		}
+		for (bp = head_bp; bp != NULL; bp = bp->next)
+			if (bp->filename != NULL && strcmp (bp->filename, path) == 0)
+				break;
+	}
+	window_set_current (window_for_link (from, bp));
+	return r != NULL ? find_file_remote (r, path) : find_file (path);
 }
 
 static int

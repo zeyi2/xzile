@@ -213,6 +213,53 @@ popup_window (void)
 	return cur_wp->next != NULL ? cur_wp->next : head_wp;
 }
 
+/* A sole window at least this wide is split side by side for a link. */
+#define LINK_SPLIT_WIDTH 40
+
+/* The window in which to show a file for a link followed in the
+   current window `from': the nearest window to the left of `from',
+   else one showing `bp' already (if not NULL), else another window,
+   one not showing a terminal if possible. A sole window is split side
+   by side if wide enough, `from' becoming the left half and the right
+   half showing what `from' did; otherwise as for popup_window. */
+Window *
+window_for_link (Window *from, const Buffer *bp)
+{
+	WinNode *f = find_leaf_for (from);
+	Window *left = NULL, *other = NULL;
+	size_t left_edge = 0, left_overlap = 0;
+	for (Window *wp = head_wp; wp != NULL && f != NULL; wp = wp->next) {
+		WinNode *n = wp != from ? find_leaf_for (wp) : NULL;
+		if (n == NULL)
+			continue;
+		size_t top = MAX (n->y, f->y), bottom = MIN (n->y + n->height, f->y + f->height);
+		size_t overlap = bottom > top ? bottom - top : 0, edge = n->x + n->width;
+		if (edge <= f->x && overlap > 0) {
+			if (left == NULL || edge > left_edge || (edge == left_edge && overlap > left_overlap)) {
+				left = wp;
+				left_edge = edge;
+				left_overlap = overlap;
+			}
+		} else if (other == NULL || (other->bp->shell != NULL && wp->bp->shell == NULL))
+			other = wp;
+	}
+	if (left != NULL)
+		return left;
+	if (bp != NULL)
+		for (Window *wp = head_wp; wp != NULL; wp = wp->next)
+			if (wp != from && wp->bp == bp)
+				return wp;
+	if (other != NULL)
+		return other;
+
+	if (from->fwidth >= LINK_SPLIT_WIDTH) {
+		wm_split_cols (from);
+		return from;
+	}
+	Window *wp = popup_window ();
+	return wp != NULL ? wp : from;
+}
+
 /* The first window showing `bp', or NULL. */
 Window *
 window_showing (const Buffer *bp)
@@ -356,17 +403,41 @@ mouse_leaf (size_t *y, size_t *x)
 }
 
 /* Move point to the text shown at row `y', column `x' of the current
-   window. */
-static void
+   window. Returns whether a character is shown there, rather than the
+   gutter or the space after a line or after the buffer. */
+static bool
 move_point_to_cell (size_t y, size_t x)
 {
 	if (shell_char_mode (cur_bp) || preview_showing (cur_bp))
-		return;
+		return false;
 	y = MIN (y, cur_wp->eheight > 0 ? cur_wp->eheight - 1 : 0);
-	buffer_move_line (cur_bp, (long) y - (long) cur_wp->topdelta);
+	/* The top line, as redisplay finds it. */
+	size_t line = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
+	bool moved = buffer_move_line (cur_bp, (long) y - (long) MIN (cur_wp->topdelta, line));
 	size_t gutter = cur_wp->gutter_width;
 	cur_bp->goalc = (x > gutter ? x - gutter : 0) + cur_wp->start_column;
 	buffer_goto_goalc (cur_bp);
+	return moved && x >= gutter && !buffer_eolp (cur_bp);
+}
+
+/* A press that followed a link leaves its drag to no window. */
+static bool link_followed;
+
+/* Follow the link, if any, at row `y', column `x' of the current
+   window, at point if `on_text': a file name in Dired, or a reference
+   to a place in a file in a terminal or a compilation buffer. */
+static bool
+follow_link (size_t y, size_t x, bool on_text)
+{
+	if (shell_char_mode (cur_bp))
+		return shell_follow_link (cur_wp, y, x);
+	if (!on_text)
+		return false;
+	if (cur_bp->dired != NULL)
+		return dired_follow_link (buffer_pt (cur_bp));
+	if (cur_bp->shell != NULL || cur_bp->compilation != NULL)
+		return follow_reference_at (cur_wp, buffer_pt (cur_bp));
+	return false;
 }
 
 static bool
@@ -374,6 +445,7 @@ F_mouse_set_point (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	link_followed = false;
 	size_t y, x;
 	WinNode *leaf = mouse_leaf (&y, &x);
 	if (leaf == NULL)
@@ -381,8 +453,10 @@ F_mouse_set_point (long uniarg, Args *args)
 	if (leaf->wp != cur_wp)
 		window_set_current (leaf->wp);
 	cur_bp->mark_active = false;
-	if (y < cur_wp->eheight)
-		move_point_to_cell (y, x);
+	if (y < cur_wp->eheight) {
+		bool on_text = move_point_to_cell (y, x);
+		link_followed = x < cur_wp->ewidth && follow_link (y, x, on_text);
+	}
 	return true;
 }
 
@@ -391,6 +465,8 @@ F_mouse_drag_region (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	if (link_followed)
+		return true;
 	size_t y, x;
 	if (!term_mouse_position (&y, &x))
 		return false;
@@ -468,7 +544,10 @@ window_init (void)
 {
 	lisp_func_new ("mouse-set-point", F_mouse_set_point, true,
 		       "Move point to the position clicked on with the mouse,\n"
-		       "selecting the window clicked in.");
+		       "selecting the window clicked in.\n"
+		       "A click on a link follows it: on a file name in Dired, or on a\n"
+		       "FILE:LINE[:COL] reference in a terminal or *compilation*, which\n"
+		       "is visited in the window to the left (see `shell').");
 
 	lisp_func_new ("mouse-drag-region", F_mouse_drag_region, true,
 		       "Set the region to the text the mouse is dragged over.");

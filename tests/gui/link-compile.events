@@ -1,0 +1,30 @@
+# A click on an error message in *compilation* shows its place in the
+# window above. Clicks on the rest of the message, and on the command,
+# do nothing.
+down x alt
+text x
+up x alt
+sleep 200
+text compile
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text printf '%s:4:3: warning\n'
+text  link-compile.txt
+down Return
+sleep 1500
+# *compilation* is from row 17: its fifth line has the message.
+click 21 25
+sleep 300
+text z
+sleep 200
+click 20 12
+sleep 300
+text z
+sleep 200
+click 21 6
+sleep 300
+text A

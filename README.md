@@ -49,7 +49,7 @@ Linux also needs WebKitGTK for HTML previews:
 make gui            # builds the GUI with all previews (including the Linux HTML helper)
 make install-gui    # installs the GUI and, on Linux, its helper and desktop entry
 make app            # macOS: builds XZile.app, to drag to Applications
-make check-gui      # Linux: tests the GUI's keyboard and input method handling
+make check-gui      # Linux: tests the GUI's keyboard, input method and mouse handling
 ```
 
 What the window adds to the terminal editor:
@@ -58,6 +58,10 @@ What the window adds to the terminal editor:
   `M-x load-theme`. The `cursor` face sets the cursor colour.
 - Click to move point and select a window, drag to select, and scroll
   the window under the pointer with the wheel.
+- Click a `FILE:LINE[:COL]` reference in a terminal or `*compilation*`
+  to visit that place in the window on the left (a sole window is
+  split side by side for it), or a name in Dired to visit that file
+  there or list that directory in place. This works in `xzile` too.
 - Drag a status bar, or the border between side-by-side windows, to
   resize them.
 - Kills and yanks use the system clipboard; middle-click pastes.
@@ -221,6 +225,13 @@ ignoring case, and a short name also matches that name with a domain
 (`host` and `host.example`, but not `host.example` and
 `host.example.other`). Reports for other hosts, such as those of a
 shell that ran `ssh` itself, are ignored.
+
+A click on a `FILE:LINE[:COL]` reference in a remote terminal visits
+the file on that machine, relative to the terminal's directory there.
+A terminal whose last OSC 7 named another host (which never changes
+its directory, local or remote), or a local one with
+`ssh` (or `mosh`, `telnet`, ...) in the foreground, refuses such
+clicks with a message rather than open a local file of the same name.
 
 XZile runs the system `ssh` with `BatchMode=yes`: it never asks for a
 password or passphrase, and host keys are checked as your ssh

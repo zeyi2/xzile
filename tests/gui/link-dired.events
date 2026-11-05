@@ -1,0 +1,92 @@
+# Clicks in Dired. Beside a file's name, nothing is done; on it, the
+# file is shown in the window to the left, the sole window being split
+# for it and keeping the listing. A directory's name lists it in the
+# same window.
+down x alt
+text x
+up x alt
+sleep 200
+text shell-command
+down Return
+up Return
+sleep 300
+text mkdir link-dired.d; touch
+text  link-dired.d/inner
+down Return
+up Return
+sleep 500
+down x ctrl
+up x ctrl
+down d
+text d
+sleep 300
+down Return
+up Return
+sleep 800
+down s ctrl
+up s ctrl
+text link-dired.txt
+down Return
+up Return
+sleep 300
+# Point is just after the file's name. A click moves the cursor: on the
+# date, it goes there; past the end of the line, to the end.
+click . .-18
+sleep 300
+text z
+sleep 200
+click . .+21
+sleep 300
+text z
+sleep 200
+click . .-5
+sleep 300
+text F
+sleep 200
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200
+down r ctrl
+up r ctrl
+text link-dired.d
+down Return
+up Return
+sleep 300
+# Point is at the start of the directory's name.
+click . .+2
+sleep 500
+# Its listing is in this window: copy the name of its file, then go
+# back up with "..", on the line above.
+down s ctrl
+up s ctrl
+text inner
+down Return
+up Return
+sleep 300
+text w
+sleep 300
+click .-1 .-5
+sleep 500
+click 0 0
+sleep 300
+text L
+down y ctrl
+up y ctrl
+sleep 200
+sleep 200
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200
+down x ctrl
+up x ctrl
+down 0
+text 0
+sleep 300
+# The file now fills the frame: so there were just two windows.
+click 0 60
+sleep 300
+text R

@@ -55,6 +55,18 @@ GNU Zile NEWS                                         -*- outline -*-
   to scroll. Hold Shift (Option in some macOS terminals) to select
   text with the terminal instead.
 
+  Links: a click on a FILE:LINE[:COL] reference (an error message, or
+  grep -n output) in a terminal, in char or line mode, or in
+  *compilation* visits that place in the window on the left of the
+  one clicked, splitting a sole window side by side for it; the
+  terminal stays in view. Only the reference clicked is followed, and
+  only if the file exists. In Dired, a click on a file's name visits
+  it there too, keeping the listing, and one on a directory's name
+  lists it in place. Clicks elsewhere, and drags, work as before, and
+  programs that read the mouse still get it. In a remote terminal the
+  file is visited on its machine; a terminal that reports another host
+  by OSC 7, or runs ssh in the foreground, refuses such clicks.
+
   Compilation: M-x compile runs a command (by default `make -k')
   asynchronously, with its output in *compilation*. next-error (C-x `,
   M-g n) and previous-error (M-g p) visit the errors and warnings of

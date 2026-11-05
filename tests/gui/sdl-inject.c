@@ -26,7 +26,15 @@
  *   up KEY [MODS]     SDL_KEYUP
  *   text STRING       SDL_TEXTINPUT with the rest of the line
  *   edit [STRING]     SDL_TEXTEDITING; empty when a composition ends
+ *   press ROW COL     SDL_MOUSEBUTTONDOWN of the left button on a cell
+ *   drag ROW COL      SDL_MOUSEMOTION there with the left button down
+ *   release ROW COL   SDL_MOUSEBUTTONUP of the left button
+ *   click ROW COL     press then release
  * MODS is a comma-separated list of ctrl, shift, alt, ralt, gui, mode.
+ * ROW and COL count cells from 0 at the top left of the frame, or from
+ * the cursor's cell when written `.', `.+N' or `.-N'. The cell size and
+ * the cursor are those last given to SDL_SetTextInputRect, so the
+ * cursor must have been drawn first.
  * Events with no sleep between them arrive together, as SDL delivers
  * those of one key press.
  */
@@ -38,9 +46,16 @@
 #include <string.h>
 #include <SDL.h>
 
+/* The frame's padding, in pixels at a scale of 1 (as with the dummy
+   video driver); PADDING in gui.c. */
+#define PAD 10
+
 static FILE *script;
 static int finished;
 static Uint32 resume_at;
+static SDL_Rect cursor = { PAD, PAD, 8, 16 };
+static SDL_Event pending;	/* The release of a click. */
+static int have_pending;
 
 static Uint16
 parse_mods (char *s)
@@ -62,11 +77,62 @@ parse_mods (char *s)
 	return m;
 }
 
+/* The pixel at the middle of the cell at row or column `s', the cells
+   being `size' pixels, the cursor's `at'. */
+static int
+cell_pixel (const char *s, int at, int size)
+{
+	if (s == NULL || s[0] == '\0') {
+		fprintf (stderr, "sdl-inject: missing cell coordinate\n");
+		return 0;
+	}
+	int origin = PAD;
+	if (s[0] == '.') {
+		origin = at;
+		s++;
+	}
+	return origin + atoi (s) * size + size / 2;
+}
+
+static void
+mouse_event (SDL_Event *ev, const char *cmd, char *arg)
+{
+	char *col = arg != NULL ? strchr (arg, ' ') : NULL;
+	if (col != NULL)
+		*col++ = '\0';
+	int x = cell_pixel (col, cursor.x, cursor.w), y = cell_pixel (arg, cursor.y, cursor.h);
+	if (strcmp (cmd, "drag") == 0) {
+		ev->type = SDL_MOUSEMOTION;
+		ev->motion.state = SDL_BUTTON_LMASK;
+		ev->motion.x = x;
+		ev->motion.y = y;
+		return;
+	}
+	ev->type = cmd[0] == 'r' ? SDL_MOUSEBUTTONUP : SDL_MOUSEBUTTONDOWN;
+	ev->button.button = SDL_BUTTON_LEFT;
+	ev->button.state = cmd[0] == 'r' ? SDL_RELEASED : SDL_PRESSED;
+	ev->button.clicks = 1;
+	ev->button.x = x;
+	ev->button.y = y;
+	if (cmd[0] == 'c') {
+		pending = *ev;
+		pending.type = SDL_MOUSEBUTTONUP;
+		pending.button.state = SDL_RELEASED;
+		have_pending = 1;
+	}
+}
+
 /* Fill `ev' with the next scripted event; 0 if none is due. */
 static int
 next_event (SDL_Event *ev)
 {
 	char line[1024];
+	if (have_pending) {
+		*ev = pending;
+		ev->common.timestamp = SDL_GetTicks ();
+		have_pending = 0;
+		return 1;
+	}
 	if (script == NULL && !finished) {
 		const char *path = getenv ("XZ_INJECT");
 		if (path == NULL || (script = fopen (path, "r")) == NULL)
@@ -110,6 +176,9 @@ next_event (SDL_Event *ev)
 			ev->type = SDL_TEXTEDITING;
 			snprintf (ev->edit.text, sizeof ev->edit.text, "%s", arg != NULL ? arg : "");
 			ev->edit.start = ev->edit.length = (Sint32) SDL_utf8strlen (ev->edit.text);
+		} else if (strcmp (line, "press") == 0 || strcmp (line, "drag") == 0 ||
+			   strcmp (line, "release") == 0 || strcmp (line, "click") == 0) {
+			mouse_event (ev, line, arg);
 		} else {
 			fprintf (stderr, "sdl-inject: unknown command `%s'\n", line);
 			continue;
@@ -128,6 +197,17 @@ SDL_PollEvent (SDL_Event *ev)
 		real = (int (*) (SDL_Event *)) dlsym (RTLD_NEXT, "SDL_PollEvent");
 	SDL_Event tmp;
 	return next_event (ev != NULL ? ev : &tmp) || real (ev);
+}
+
+void
+SDL_SetTextInputRect (const SDL_Rect *rect)
+{
+	static void (*real) (const SDL_Rect *);
+	if (real == NULL)
+		real = (void (*) (const SDL_Rect *)) dlsym (RTLD_NEXT, "SDL_SetTextInputRect");
+	if (rect != NULL && rect->w > 0 && rect->h > 0)
+		cursor = *rect;
+	real (rect);
 }
 
 /* Wake up often while events are still to come. */

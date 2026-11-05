@@ -487,6 +487,40 @@ find_error (Buffer *bp, size_t o, bool forward)
 	return NOPOS;
 }
 
+/* The file named `file' by the message at `lo' in `bp', or NULL if
+   there is no such file. */
+static char *
+error_path (Buffer *bp, size_t lo, const char *file)
+{
+	if (file[0] == '/')
+		return file_is_regular (file) ? xstrdup (file) : NULL;
+	char *path = NULL;
+	StrVec dirs = { NULL, 0, 0 };
+	directories_at (bp, lo, &dirs);
+	for (size_t i = 0; i < dirs.n && path == NULL; i++) {
+		char *p = path_join (dirs.v[i], file);
+		if (file_is_regular (p))
+			path = p;
+		else
+			free (p);
+	}
+	sv_clear (&dirs);
+	return path;
+}
+
+/* Move point to line `line', column `col' (both from 1; a column of 0
+   is the start of the line). */
+static void
+goto_line_col (Buffer *bp, long line, long col)
+{
+	buffer_goto_offset (bp, 0);
+	buffer_move_line (bp, line - 1);
+	buffer_goto_offset (bp, buffer_line_o (bp));
+	for (long i = 1; i < col && !buffer_eolp (bp); i++)
+		buffer_move_char (bp, 1);
+	thisflag |= FLAG_NEED_RESYNC;
+}
+
 static bool
 visit_error (Buffer *bp, size_t lo)
 {
@@ -494,24 +528,9 @@ visit_error (Buffer *bp, size_t lo)
 	if (!parse_error_at (bp, lo, &e))
 		return false;
 
-	char *path = NULL;
-	if (e.file[0] == '/')
-		path = xstrdup (e.file);
-	else {
-		StrVec dirs = { NULL, 0, 0 };
-		directories_at (bp, lo, &dirs);
-		for (size_t i = 0; i < dirs.n && path == NULL; i++) {
-			char *p = path_join (dirs.v[i], e.file);
-			if (file_is_regular (p))
-				path = p;
-			else
-				free (p);
-		}
-		sv_clear (&dirs);
-	}
-	if (path == NULL || !file_is_regular (path)) {
+	char *path = error_path (bp, lo, e.file);
+	if (path == NULL) {
 		minibuf_error ("Cannot find file `%s'", e.file);
-		free (path);
 		free (e.file);
 		return false;
 	}
@@ -534,16 +553,121 @@ visit_error (Buffer *bp, size_t lo)
 
 	window_set_current (target);
 	bool ok = find_file (path);
-	if (ok) {
-		buffer_goto_offset (cur_bp, 0);
-		buffer_move_line (cur_bp, e.line - 1);
-		buffer_goto_offset (cur_bp, buffer_line_o (cur_bp));
-		for (long i = 1; i < e.col && !buffer_eolp (cur_bp); i++)
-			buffer_move_char (cur_bp, 1);
-		thisflag |= FLAG_NEED_RESYNC;
-	}
+	if (ok)
+		goto_line_col (cur_bp, e.line, e.col);
 	free (path);
 	free (e.file);
+	return ok;
+}
+
+/* Whether a reference may start at byte `i' of `s': at the start of
+   the line, or after a space, an opening bracket or a quote. */
+static bool
+reference_start (const char *s, size_t i)
+{
+	return i == 0 || strchr (" \t([{<\"'`=,;|", s[i - 1]) != NULL;
+}
+
+/* The reference to a place in a file that byte `i' of the line `s' is
+   in: the location of an error message, as `next-error' visits, or
+   any "FILE:LINE[:COL]" on the line, as grep -n prints. The reference
+   is from the start of FILE to the end of LINE or COL. */
+static bool
+reference_at (const char *s, size_t len, size_t i, ErrorInfo *e)
+{
+	if (parse_error_line (s, len, e)) {
+		if (i >= e->file_start && i < e->loc_end)
+			return true;
+		free (e->file);
+	}
+	for (size_t j = 0; j <= i && j < len; j++) {
+		if (!reference_start (s, j))
+			continue;
+		memset (e, 0, sizeof *e);
+		if (parse_gnu (s, len, j, e) && e->line > 0 && i < e->loc_end) {
+			e->file = xstrndup (s + e->file_start, e->file_end - e->file_start);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* The file `file' named in the terminal `bp': on `*r', set to its
+   machine (NULL for this one). A local name is NULL unless it is a
+   file; a remote one is checked when visited. */
+static char *
+terminal_path (Buffer *bp, const char *file, Remote **r)
+{
+	*r = bp->remote;
+	if (*r != NULL) {
+		char *dir = remote_buffer_dir (bp);
+		char *joined = file[0] == '/' || file[0] == '~' ? xstrdup (file) : path_join (dir, file);
+		char *path = remote_expand_path (*r, joined);
+		if (path == NULL)
+			minibuf_error ("%s", remote_last_error ());
+		free (joined);
+		free (dir);
+		return path;
+	}
+	char *joined = file[0] == '/' || file[0] == '~' ? xstrdup (file) : path_join (bp->dir, file);
+	char *path = expand_path (joined);
+	free (joined);
+	if (path != NULL && !file_is_regular (path)) {
+		free (path);
+		path = NULL;
+	}
+	return path;
+}
+
+bool
+follow_reference (Window *wp, const char *s, size_t len, size_t i, size_t lo)
+{
+	Buffer *bp = wp->bp;
+	ErrorInfo e;
+	if ((bp->compilation == NULL && bp->shell == NULL) || !reference_at (s, len, i, &e))
+		return false;
+
+	char *where = shell_elsewhere (bp);
+	if (where != NULL) {
+		/* The file would be looked for on the wrong machine. */
+		minibuf_error ("Cannot visit `%s': the terminal is %s", e.file, where);
+		debug_log ("remote", "%s: not visiting %s: the terminal is %s", bp->name, e.file, where);
+		free (where);
+		free (e.file);
+		return true;
+	}
+	Remote *r = NULL;
+	char *path = bp->compilation != NULL ? error_path (bp, lo, e.file) : terminal_path (bp, e.file, &r);
+	if (path == NULL) {
+		/* Not a file here: the text is only text. */
+		free (e.file);
+		return r != NULL;
+	}
+
+	if (bp->compilation != NULL && lo != NOPOS) {
+		ErrorInfo whole;
+		if (parse_error_at (bp, lo, &whole)) {
+			bp->compilation->error_o = lo;
+			free (whole.file);
+		}
+	}
+	bool is_dir;
+	if (find_file_for_link (wp, r, path, &is_dir))
+		goto_line_col (cur_bp, e.line, e.col);
+	else if (is_dir)
+		minibuf_error ("`%s' is a directory", e.file);
+	free (path);
+	free (e.file);
+	return true;
+}
+
+bool
+follow_reference_at (Window *wp, size_t o)
+{
+	size_t lo = buffer_start_of_line (wp->bp, o), len;
+	char *s = line_text (wp->bp, lo, &len);
+	bool ok = follow_reference (wp, s, len, o - lo, lo);
+	free (s);
 	return ok;
 }
 

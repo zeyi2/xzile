@@ -446,6 +446,9 @@ Process *process_start (const char *const *argv, const char *exec_path, const ch
 			ProcessOutputFn on_output, ProcessExitFn on_exit, void *owner);
 bool process_alive (const Process *p);
 pid_t process_pid (const Process *p);
+/* The name of the program in the foreground of the pseudo-terminal of
+   `p', or NULL if it is not known. */
+char *process_foreground (const Process *p);
 void process_send (Process *p, const char *s, size_t len);
 void process_signal (Process *p, int sig);
 void process_resize (Process *p, int rows, int cols);
@@ -799,6 +802,7 @@ void window_set_current (Window *wp);
 void wm_delete (Window *wp);
 void create_scratch_window (void);
 Window *popup_window (void);
+Window *window_for_link (Window *from, const Buffer *bp);
 Window *window_showing (const Buffer *bp);
 void window_show_buffer (Window *wp, Buffer *bp, size_t o);
 void window_init (void);
@@ -1063,6 +1067,7 @@ char *expand_path (const char *path);
 char *compact_path (const char *path);
 bool find_file (const char *filename);
 bool find_file_remote (Remote *r, const char *path);
+bool find_file_for_link (Window *from, Remote *r, const char *path, bool *is_dir);
 void buffer_note_disk (Buffer *bp);
 bool buffers_check_disk (bool all);
 int write_to_disk (Buffer *bp, const char *filename, mode_t mode);
@@ -1081,13 +1086,23 @@ bool shell_mouse_at (size_t y, size_t x);
 /* Send mouse event `key' to the terminal program it is for, if that
    program reads the mouse; returns false otherwise. */
 bool shell_mouse (Keystroke key);
+bool shell_follow_link (Window *wp, size_t y, size_t x);
 void shell_free (Buffer *bp);
 const char *shell_directory (const Buffer *bp);
+char *shell_elsewhere (const Buffer *bp);
 void terminal_init (void);
 
 /* compile.c */
 void compilation_free (Buffer *bp);
 bool compilation_process_alive (const Buffer *bp);
+/* Visit the place in a file named by a reference that a click in
+   window `wp' found at byte `i' of the line `s' (`len' bytes) of its
+   buffer, a compilation buffer or a terminal: from offset `lo' in the
+   buffer, or NOPOS for a row of a terminal's screen. Returns false if
+   there is no such reference, or no such file here. */
+bool follow_reference (Window *wp, const char *s, size_t len, size_t i, size_t lo);
+/* Likewise, at offset `o' of the buffer of `wp'. */
+bool follow_reference_at (Window *wp, size_t o);
 void compile_init (void);
 
 /* magit.c */
@@ -1099,6 +1114,7 @@ void magit_init (void);
 bool dired (const char *dir);
 bool dired_remote (Remote *r, const char *dir);
 const char *dired_directory (const Buffer *bp);
+bool dired_follow_link (size_t o);
 void dired_free (Buffer *bp);
 void dired_init (void);
 
@@ -1140,6 +1156,7 @@ int remote_shell_command (Remote *r, const char *dir, const char *cmd, const cha
 bool remote_terminal_check (Remote *r, const char *dir, char **adir, char **shell);
 const char **remote_terminal_argv (Remote *r, const char *dir, const char *program, StrVec *keep);
 bool remote_same_host (const Remote *r, const char *host);
+bool remote_host_is_local (const char *host);
 bool remote_refuse (const Buffer *bp, const char *what);
 void remote_shutdown (void);
 void locations_load (void);

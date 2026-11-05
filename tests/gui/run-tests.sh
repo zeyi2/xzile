@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run the xzile-gui keyboard and input method tests
+# Run the xzile-gui keyboard, input method and mouse tests
 #
 # Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
 #

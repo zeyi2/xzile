@@ -1,0 +1,75 @@
+# A click on a FILE:LINE:COL reference in a terminal in line mode, in
+# the middle of three windows, shows the file at the place in the
+# window on its left, not in the one on its right, even though that
+# one shows the file already. Clicks beside the reference and on a
+# blank cell do nothing.
+down x ctrl
+up x ctrl
+down 3
+text 3
+sleep 200
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200
+down x ctrl
+up x ctrl
+down 3
+text 3
+sleep 200
+# The middle window, columns 50 to 74.
+down x alt
+text x
+up x alt
+sleep 200
+text term
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text printf 'see %s:2:3\n'
+text  link-line.txt
+down Return
+sleep 1000
+# The right window keeps the file; the left one shows *scratch*.
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200
+down x ctrl
+up x ctrl
+down b
+text b
+sleep 200
+text *scratch*
+down Return
+sleep 200
+# The program has finished, leaving the terminal in line mode.
+click 0 51
+sleep 300
+text z
+sleep 200
+click 10 60
+sleep 300
+text z
+sleep 200
+click 2 53
+sleep 300
+text z
+sleep 200
+click 0 58
+sleep 300
+text A
+sleep 300
+click 0 0
+sleep 300
+text L

@@ -23,7 +23,9 @@
    In char mode, which is the default, the window shows the terminal
    and keys are sent to the program, except for C-x, which is a prefix
    for the usual C-x commands (C-x C-x sends C-x itself), and M-x.
-   Mouse events go to a program that has asked for them.
+   Mouse events go to a program that has asked for them; otherwise a
+   click on a FILE:LINE[:COL] reference visits it (see follow_link in
+   window.c).
    In line mode (C-x C-j), the buffer holds the scrollback and screen
    as ordinary read-only text; C-x C-k or q returns to char mode. */
 
@@ -39,6 +41,8 @@ struct Shell {
 	char *program;		/* For messages. */
 	char *remote_dir;	/* On another machine (bp->remote), the
 				   directory there; bp->dir stays local. */
+	char *foreign_host;	/* The host named by the last OSC 7, if it
+				   is not the terminal's machine; or NULL. */
 	bool line_mode;
 };
 
@@ -74,6 +78,7 @@ shell_free (Buffer *bp)
 	vterm_free (sh->vt);
 	free (sh->program);
 	free (sh->remote_dir);
+	free (sh->foreign_host);
 	free (sh);
 	bp->shell = NULL;
 }
@@ -83,6 +88,31 @@ const char *
 shell_directory (const Buffer *bp)
 {
 	return bp->shell != NULL && bp->remote != NULL ? bp->shell->remote_dir : NULL;
+}
+
+/* Programs that log in to another machine. */
+static const char *const login_programs[] = { "ssh", "slogin", "mosh-client", "telnet", "rlogin", "rsh" };
+
+/* If the program of terminal `bp' may be on another machine than the
+   terminal's, where it is, as "on HOST" or "running ssh"; else NULL.
+   It is on the host the last OSC 7 named; on this machine, the program
+   in the foreground may also log in elsewhere. */
+char *
+shell_elsewhere (const Buffer *bp)
+{
+	Shell *sh = bp->shell;
+	if (sh == NULL)
+		return NULL;
+	if (sh->foreign_host != NULL)
+		return xasprintf ("on %s", sh->foreign_host);
+	if (bp->remote != NULL)
+		return NULL;
+	char *name = process_foreground (sh->proc), *where = NULL;
+	for (size_t i = 0; name != NULL && where == NULL && i < sizeof login_programs / sizeof login_programs[0]; i++)
+		if (strcmp (name, login_programs[i]) == 0)
+			where = xasprintf ("running %s", name);
+	free (name);
+	return where;
 }
 
 
@@ -115,9 +145,10 @@ hex_value (char c)
 	return -1;
 }
 
-/* Track the working directory from OSC 7, "file://HOST/PATH". On a
-   remote terminal, the path is on its machine, and only taken if HOST
-   is that machine: a shell that ssh'ed elsewhere reports another. */
+/* Track the working directory from OSC 7, "file://HOST/PATH", only
+   taken if HOST is the terminal's machine (a shell that ssh'ed
+   elsewhere reports another). On a remote terminal, the path is on its
+   machine. */
 static void
 vterm_osc (int code, const char *text, void *owner)
 {
@@ -127,15 +158,16 @@ vterm_osc (int code, const char *text, void *owner)
 	const char *path = strchr (text + 7, '/');
 	if (path == NULL)
 		return;
-	if (sh->bp->remote != NULL) {
-		char *host = xstrndup (text + 7, (size_t) (path - (text + 7)));
-		bool same = remote_same_host (sh->bp->remote, host);
-		if (!same)
-			debug_log ("remote", "%s: ignored OSC 7 for host %s", sh->bp->name, host);
+	char *host = xstrndup (text + 7, (size_t) (path - (text + 7)));
+	bool same = sh->bp->remote != NULL ? remote_same_host (sh->bp->remote, host) : remote_host_is_local (host);
+	free (sh->foreign_host);
+	sh->foreign_host = same ? NULL : xstrdup (host);
+	if (!same) {
+		debug_log ("remote", "%s: ignored OSC 7 for host %s", sh->bp->name, host);
 		free (host);
-		if (!same)
-			return;
+		return;
 	}
+	free (host);
 
 	StrBuf sb;
 	sb_init (&sb);
@@ -340,9 +372,10 @@ enter_line_mode (Shell *sh)
 	thisflag |= FLAG_NEED_RESYNC;
 	for (Window *wp = head_wp; wp != NULL; wp = wp->next)
 		if (wp->bp == bp) {
-			if (wp == cur_wp)
+			if (wp == cur_wp) {
 				recenter (wp);
-			else if (wp->saved_pt != NULL)
+				wp->lastpointn = buffer_offset_to_line (bp, buffer_pt (bp));
+			} else if (wp->saved_pt != NULL)
 				wp->saved_pt->o = buffer_pt (bp);
 		}
 }
@@ -618,6 +651,36 @@ shell_mouse (Keystroke key)
 		window_set_current (wp);
 	vterm_mouse (wp->bp->shell->vt, button, action, (int) MIN (y, 0xffff), (int) MIN (x, 0xffff));
 	return true;
+}
+
+/* Follow the reference to a file, if any, shown at row `y', column `x'
+   of the terminal screen in `wp'. */
+bool
+shell_follow_link (Window *wp, size_t y, size_t x)
+{
+	VTerm *vt = wp->bp->shell->vt;
+	int cols = vterm_cols (vt);
+	if ((int) y >= vterm_rows (vt) || (int) x >= cols || x >= wp->ewidth)
+		return false;
+
+	/* The row as shown, and the byte of the clicked cell. */
+	const VCell *cells = vterm_cell (vt, (int) y, 0);
+	StrBuf sb;
+	sb_init (&sb);
+	size_t at = NOPOS;
+	for (int c = 0; c < cols; c++) {
+		const VCell *cell = &cells[c];
+		if (cell->width == 0)
+			continue;
+		if ((size_t) c == x || (cell->width == 2 && (size_t) c + 1 == x))
+			at = sb.len;
+		uint32_t cp = cell->cp == 0 || (cell->attr.flags & VATTR_INVISIBLE) ? ' ' : cell->cp;
+		char buf[4];
+		sb_addn (&sb, buf, utf8_encode (cp, buf));
+	}
+	bool ok = at != NOPOS && follow_reference (wp, sb.s, sb.len, at, NOPOS);
+	sb_free (&sb);
+	return ok;
 }
 
 static bool
@@ -903,7 +966,10 @@ terminal_init (void)
 		       "is ordinary text; C-x C-k or q returns to char mode.\n"
 		       "\n"
 		       "A program that reads the mouse gets the clicks, drags and wheel\n"
-		       "in its window.");
+		       "in its window. Otherwise, a click on a FILE:LINE[:COL] reference\n"
+		       "visits that place in the window on the left, splitting a sole window\n"
+		       "side by side for it; a terminal that reports another host by OSC 7,\n"
+		       "or runs ssh in the foreground, refuses this.");
 	lisp_func_new ("term", F_term, true,
 		       "Run PROGRAM in a terminal buffer named *terminal*.\n"
 		       "In a remote buffer, run it on its machine, in its directory there,\n"

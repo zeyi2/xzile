@@ -1,0 +1,169 @@
+#!/bin/sh
+# Clicks on FILE:LINE:COL references in terminals on other machines
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE, XZ_FIXTURE (the SSH server's
+# directory) and XZ_REMOTE_HOME set. The editor runs on a
+# pseudo-terminal made by Python, which types the keys and sends the
+# mouse clicks; without python3 the test is skipped. A file of the same
+# name is in the local directory, and must never be visited for a
+# reference printed on the other machine. Prints why on failure.
+
+set -u
+
+command -v python3 >/dev/null 2>&1 || exit 0
+
+fx=$XZ_FIXTURE
+rhome=$XZ_REMOTE_HOME
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-links.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+H=$work/home
+mkdir "$H" "$work/dir"
+printf '(setq ssh-config-file "%s/ssh_config")\n' "$fx" > "$H/.xzile"
+log=$work/debug.log
+
+mkdir -p "$rhome/lk"
+printf 'remote one\nremote two\n' > "$rhome/lk/r.txt"
+printf 'local one\nlocal two\n' > "$work/dir/r.txt"
+
+fail () {
+	echo "$*"
+	exit 1
+}
+
+# Run the editor in the local directory on a 30x120 terminal, with the
+# actions in the file `$1', one a line: `keys STRING' types STRING
+# (with Python's escapes), `click ROW COL' clicks a cell, counted from
+# 0, and `wait SECONDS' waits. Then it quits, killing any processes.
+run () {
+	rm -f "$log"
+	errors=$(cd "$work/dir" && HOME=$H TERM=xterm XZILE_DEBUG=remote XZILE_DEBUG_LOG=$log \
+		python3 - "$XZILE" "$1" <<'PY' 2>&1
+import fcntl, os, pty, select, struct, sys, termios, time
+editor, actions = sys.argv[1:3]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(editor, [editor, 'out.txt'])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
+
+def pump(secs):
+    """Read the editor's output for `secs'; False once it has exited."""
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return True
+        if select.select([fd], [], [], left)[0]:
+            try:
+                if not os.read(fd, 65536):
+                    return False
+            except OSError:
+                return False
+
+pump(1)
+for line in open(actions).read().splitlines() + ['keys \\x18\\x03', 'wait 1', 'keys yes\\r']:
+    cmd, _, arg = line.partition(' ')
+    if cmd == 'wait':
+        pump(float(arg))
+    elif cmd == 'keys':
+        os.write(fd, arg.encode().decode('unicode_escape').encode())
+        pump(0.3)
+    elif cmd == 'click':
+        row, col = (int(n) + 1 for n in arg.split())
+        os.write(fd, b'\x1b[<0;%d;%dM' % (col, row))
+        pump(0.1)
+        os.write(fd, b'\x1b[<0;%d;%dm' % (col, row))
+        pump(0.5)
+deadline = time.time() + 10
+while pump(0.5) and time.time() < deadline:
+    pass
+_, status = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+PY
+)
+	[ $? -eq 0 ] || fail "editor failed: $errors"
+}
+
+# 1. In a shell on xztest, in ~/lk, a reference opens the remote file
+# at its place, in a window made for it on the left: a character typed
+# there is saved there.
+cat > "$work/actions" <<'EOF'
+keys \x18d
+wait 0.2
+keys \x1blxztest\r
+wait 2
+keys lk\r
+wait 1
+keys \x1bxshell\r
+wait 2
+keys clear; echo r.txt:2:3\r
+wait 1
+click 0 2
+wait 2
+keys X\x18\x13
+wait 2
+EOF
+run "$work/actions"
+printf 'remote one\nreXmote two\n' | cmp -s - "$rhome/lk/r.txt" ||
+	fail "step 1: the remote file is: $(cat "$rhome/lk/r.txt")"
+printf 'local one\nlocal two\n' | cmp -s - "$work/dir/r.txt" || fail "step 1: the local file changed"
+
+# 2. In a local shell whose last OSC 7 names another host, then in ssh
+# run there, the references are refused, and the terminal's directory
+# stays as it was (a file visited from it, probe, is saved there). Back here, after an OSC 7 for this machine and the
+# end of ssh, the local file is visited.
+cat > "$work/actions" <<EOF
+keys \\x1bxshell\\r
+wait 1
+keys printf '\\\\033]7;file://elsewhere.invalid%s\\\\007' $work; clear; echo r.txt:1:1\\r
+wait 1
+click 0 1
+keys \\x18\\x06probe\\r
+wait 0.5
+keys x\\x18\\x13
+wait 0.5
+keys \\x18b*shell*\\r
+wait 0.5
+keys printf '\\\\033]7;file://localhost%s\\\\007' "\$PWD"\\r
+wait 0.5
+keys ssh -F $fx/ssh_config xztest\\r
+wait 3
+keys cd lk; clear; echo r.txt:2:3\\r
+wait 1
+click 0 1
+keys exit\\r
+wait 1
+keys clear; echo r.txt:2:3\\r
+wait 1
+click 0 1
+wait 1
+keys Y\\x18\\x13
+wait 1
+EOF
+run "$work/actions"
+[ -f "$work/dir/probe" ] && [ ! -e "$work/probe" ] ||
+	fail "step 2: OSC 7 for another host changed the terminal's directory"
+grep -F -q "*shell*: not visiting r.txt: the terminal is on elsewhere.invalid" "$log" ||
+	fail "step 2: the reference after OSC 7 for another host was not refused"
+grep -F -q "*shell*: not visiting r.txt: the terminal is running ssh" "$log" ||
+	fail "step 2: the reference from ssh was not refused"
+printf 'local one\nloYcal two\n' | cmp -s - "$work/dir/r.txt" ||
+	fail "step 2: the local file is: $(cat "$work/dir/r.txt")"
+printf 'remote one\nreXmote two\n' | cmp -s - "$rhome/lk/r.txt" || fail "step 2: the remote file changed"
+exit 0

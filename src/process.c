@@ -33,6 +33,9 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 /* Read at most this much output in one go before redisplaying. */
 #define MAX_READ_PER_EVENT (256 * 1024)
@@ -192,6 +195,35 @@ pid_t
 process_pid (const Process *p)
 {
 	return p->pid;
+}
+
+char *
+process_foreground (const Process *p)
+{
+	if (p == NULL || p->exited || p->fd < 0)
+		return NULL;
+	pid_t pgrp = tcgetpgrp (p->fd);
+	if (pgrp <= 0)
+		return NULL;
+	char name[256];
+#if defined __linux__
+	char path[64];
+	snprintf (path, sizeof path, "/proc/%ld/comm", (long) pgrp);
+	FILE *f = fopen (path, "r");
+	if (f == NULL)
+		return NULL;
+	bool ok = fgets (name, sizeof name, f) != NULL;
+	fclose (f);
+	if (!ok)
+		return NULL;
+	name[strcspn (name, "\n")] = '\0';
+#elif defined __APPLE__
+	if (proc_name (pgrp, name, sizeof name) <= 0)
+		return NULL;
+#else
+	return NULL;
+#endif
+	return xstrdup (name);
 }
 
 void

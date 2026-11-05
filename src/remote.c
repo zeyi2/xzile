@@ -1491,6 +1491,17 @@ remote_same_host (const Remote *r, const char *host)
 	return host_eq (host, r->host) || (r->nodename != NULL && host_eq (host, r->nodename));
 }
 
+/* Whether `host', as a terminal here reports it, is this machine. */
+bool
+remote_host_is_local (const char *host)
+{
+	char name[256];
+	if (host[0] == '\0' || host_eq (host, "localhost") || gethostname (name, sizeof name) != 0)
+		return true;
+	name[sizeof name - 1] = '\0';
+	return host_eq (host, name);
+}
+
 /* If `bp' is remote, say that `what' is not available for it. */
 bool
 remote_refuse (const Buffer *bp, const char *what)
