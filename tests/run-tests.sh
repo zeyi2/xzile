@@ -39,6 +39,10 @@ esac
 TERM=${TERM_FOR_TESTS:-vt100}
 export TERM
 
+# M-x shell runs $SHELL.
+SHELL=/bin/sh
+export SHELL
+
 run_test () {
 	test=${1%.el}
 	name=${test#"$srcdir"/tests/}

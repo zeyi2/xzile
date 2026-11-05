@@ -1,0 +1,13 @@
+    *shell*<5>               0  Fundamental
+ %  *shell*<3>               0  Term: char run
+ %  *shell*                  0  Term: char run
+ %  *shell*<2>               0  Term: char run
+2:two
+1:one
+1:one
+new:unset
+3:restarted
+Here is a sample file.
+It has several lines.
+
+And more than one paragraph.

@@ -45,7 +45,9 @@ GNU Zile NEWS                                         -*- outline -*-
   program except C-x, a prefix for the usual C-x commands (C-x C-x
   sends C-x), and M-x. C-x C-y pastes killed text; C-x C-j shows the
   scrollback as text to move around, search and copy, and C-x C-k or
-  q returns. The terminal follows its window's size.
+  q returns. The terminal follows its window's size. C-u M-x shell
+  starts another shell, and C-u N M-x shell switches to *shell*<N>,
+  starting it if needed.
 
   Compilation: M-x compile runs a command (by default `make -k')
   asynchronously, with its output in *compilation*. next-error (C-x `,

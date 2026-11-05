@@ -565,9 +565,10 @@ init_maps (void)
 	keymap_bind (line_map, "\\C-c\\C-c", "term-interrupt");
 }
 
-/* Start `argv' in a new terminal buffer called `name'. */
+/* Start `argv' in the terminal buffer `bp', whose program has exited,
+   or if `bp' is NULL in a new buffer called `name' (made unique). */
 static bool
-start_terminal (const char *name, const char *const *argv, const char *exec_path, const char *program)
+start_terminal (Buffer *bp, const char *name, const char *const *argv, const char *exec_path, const char *program)
 {
 	init_maps ();
 
@@ -592,18 +593,20 @@ start_terminal (const char *name, const char *const *argv, const char *exec_path
 		return false;
 	}
 
+	/* Copy first: `bp' may be the current buffer. */
 	char *dir = xstrdup (cur_bp->dir);
-	Buffer *bp = buffer_new (NULL);
-	bp->name = buffer_unique_name (name);
+	if (bp == NULL) {
+		bp = buffer_new (NULL);
+		bp->name = buffer_unique_name (name);
+		bp->nosave = true;
+		bp->noundo = true;
+	} else
+		shell_free (bp);
 	free (bp->dir);
 	bp->dir = dir;
-	bp->nosave = true;
-	bp->noundo = true;
-	bp->readonly = true;
 	bp->shell = sh;
-	bp->keymap = char_map;
 	sh->bp = bp;
-	update_mode_label (sh);
+	enter_char_mode (sh);
 	buffer_switch_to (bp, true);
 	return true;
 }
@@ -618,15 +621,31 @@ user_shell (void)
 static bool
 F_shell (long uniarg, Args *args)
 {
-	(void) uniarg;
-	(void) args;
 	if (remote_refuse (cur_bp, "shell"))
 		return false;
-	/* Reuse a running shell. */
-	Buffer *bp = buffer_find ("*shell*");
-	if (bp != NULL && shell_process_alive (bp)) {
-		buffer_switch_to (bp, true);
-		return true;
+	/* A NULL `args' means a prefix argument was given. */
+	Buffer *bp = NULL;
+	char *name;
+	if (args == NULL && (lastflag & FLAG_UNIARG_EMPTY))
+		name = buffer_unique_name ("*shell*");
+	else {
+		long n = args == NULL ? uniarg : 1;
+		if (n < 1) {
+			minibuf_error ("Shell number must be positive");
+			return false;
+		}
+		name = n == 1 ? xstrdup ("*shell*") : xasprintf ("*shell*<%ld>", n);
+		bp = buffer_find (name);
+		if (bp != NULL && bp->shell == NULL) {
+			minibuf_error ("Buffer %s is not a terminal", name);
+			free (name);
+			return false;
+		}
+		if (bp != NULL && shell_process_alive (bp)) {
+			buffer_switch_to (bp, true);
+			free (name);
+			return true;
+		}
 	}
 
 	/* Run a login shell, as terminal emulators do. */
@@ -634,10 +653,11 @@ F_shell (long uniarg, Args *args)
 	char *base = path_basename (shell);
 	char *argv0 = xstrcat3 ("-", base, "");
 	const char *argv[] = { argv0, NULL };
-	bool ok = start_terminal ("*shell*", argv, shell, base);
+	bool ok = start_terminal (bp, name, argv, shell, base);
 	free (argv0);
 	free (base);
 	free (shell);
+	free (name);
 	return ok;
 }
 
@@ -664,7 +684,7 @@ F_term (long uniarg, Args *args)
 	const char *argv[] = { "/bin/sh", "-c", cmd, NULL };
 	char *first = xstrndup (program, strcspn (program, " \t"));
 	char *base = path_basename (first);
-	bool ok = start_terminal ("*terminal*", argv, NULL, base);
+	bool ok = start_terminal (NULL, "*terminal*", argv, NULL, base);
 	free (base);
 	free (first);
 	free (cmd);
@@ -677,7 +697,11 @@ terminal_init (void)
 {
 	lisp_func_new ("shell", F_shell, true,
 		       "Run your login shell ($SHELL) in a terminal buffer named *shell*.\n"
-		       "If a shell is already running there, switch to it.\n"
+		       "If a shell is already running there, switch to it; if its shell has\n"
+		       "exited, start a new one in the same buffer.\n"
+		       "With a numeric prefix argument N, use the buffer *shell*<N> instead\n"
+		       "(N = 1 is *shell*). With just C-u, start another shell, in a new\n"
+		       "buffer *shell* or *shell*<N>.\n"
 		       "\n"
 		       "Keys go to the shell, except for C-x, which is a prefix for the usual\n"
 		       "C-x commands, and M-x. C-x C-x sends C-x, C-x C-y pastes the last\n"
