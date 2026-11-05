@@ -30,7 +30,9 @@ M-l chooses a location: this machine, or another reached with
 a new host, user and port); the prompt names it.
 Remote text files can be visited, created, saved and reverted, and
 remote directories browsed in Dired; commands that would change files
-from Dired, compile or run Magit are refused in remote buffers.
+from Dired or compile are refused in remote buffers.
+\fBmagit-status\fR (C-x g) in a remote buffer shows the repository
+there, and runs its git commands on that machine.
 From a remote buffer, \fBshell-command\fR (M-!) and
 \fBshell-command-on-region\fR (M-|) run on its machine, in its
 directory there, and \fBshell\fR and \fBterm\fR run the remote

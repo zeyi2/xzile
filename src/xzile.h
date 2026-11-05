@@ -1108,6 +1108,7 @@ void compile_init (void);
 /* magit.c */
 void magit_free (Buffer *bp);
 bool magit_buffer_is_transient (const Buffer *bp);
+const char *magit_directory (const Buffer *bp);
 void magit_init (void);
 
 /* dired.c */
@@ -1153,6 +1154,9 @@ char *remote_describe (const Buffer *bp);
 char *remote_buffer_dir (const Buffer *bp);
 int remote_shell_command (Remote *r, const char *dir, const char *cmd, const char *input, size_t input_len,
 			  StrBuf *output);
+int remote_run (Remote *r, const char *dir, const char *const *argv, const char *input, size_t input_len,
+		StrBuf *out, StrBuf *err, const char *what);
+const char **remote_command_argv (Remote *r, const char *dir, const char *const *argv, StrVec *keep);
 bool remote_terminal_check (Remote *r, const char *dir, char **adir, char **shell);
 const char **remote_terminal_argv (Remote *r, const char *dir, const char *program, StrVec *keep);
 bool remote_same_host (const Remote *r, const char *host);

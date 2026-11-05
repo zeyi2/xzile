@@ -1,0 +1,11 @@
+git apply on xztest: exit status 0
+git add on xztest: exit status 0
+git reset on xztest: exit status 0
+error: Cancelled: git commit on ssh:xztest
+error: ssh xztest: no answer within 2 seconds (see remote-timeout)
+Stopping the command on xztest: exited
+git commit on xztest: exit status 0
+Checking a file on xztest: exit status 0
+git rev-parse on xztest: exit status 128
+/home/missing on ssh:xztest: No such directory, or it cannot be opened
+$(x) on ssh:xztest: No such directory, or it cannot be opened

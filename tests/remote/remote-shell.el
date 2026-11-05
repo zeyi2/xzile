@@ -35,8 +35,8 @@
 (sit-for 1)
 ; In the remote shell's buffer, shell-command runs there too.
 (execute-kbd-macro "\M-xshell-command\recho 2:$(pwd | sed s,^$HOME,~,) >> ~/out\r")
-; Compilation and Magit are still refused there; dired-jump lists the
-; remote directory.
+; Compilation is still refused there; Magit looks for a repository in
+; the remote directory (there is none); dired-jump lists it.
 (execute-kbd-macro "\M-xcompile\r\M-xmagit-status\r\M-xdired-jump\r")
 (switch-to-buffer "*shell ssh:xztest*")
 ; C-d: end of input, so the shell exits; M-x shell starts another in

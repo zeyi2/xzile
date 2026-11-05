@@ -34,9 +34,13 @@
    Operations wait for ssh while polling the keyboard: C-g kills ssh,
    other keys are kept for later, and remote-timeout bounds the wait.
 
-   Shell commands run the same way. Terminals instead run ssh on a
-   local pseudo-terminal, asking for a remote one, as long-lived
-   processes of terminal.c, which remote-timeout does not bound.
+   Shell commands and programs run the same way. Terminals and
+   background programs instead run ssh as long-lived processes of
+   terminal.c or process.c (terminals on a local pseudo-terminal,
+   asking for a remote one), which remote-timeout does not bound.
+
+   Operations use the keyboard, the minibuffer and the error state
+   below, so they must run on the editor's thread only.
 
    Machines are interned, and live until exit: buffers point to them. */
 
@@ -1280,14 +1284,16 @@ remote_describe (const Buffer *bp)
 	const char *path = bp->remote_path != NULL ? bp->remote_path : dired_directory (bp);
 	if (path == NULL)
 		path = shell_directory (bp);
+	if (path == NULL)
+		path = magit_directory (bp);
 	char *shown = path != NULL ? remote_compact_path (bp->remote, path) : xstrdup ("");
 	char *s = xasprintf ("ssh:%s:%s", bp->remote->label, shown);
 	free (shown);
 	return s;
 }
 
-/* The remote directory of `bp' (its file's, the one it lists, or its
-   terminal's), or NULL if it is not remote. */
+/* The remote directory of `bp' (its file's, the one it lists, its
+   terminal's or its repository's), or NULL if it is not remote. */
 char *
 remote_buffer_dir (const Buffer *bp)
 {
@@ -1298,6 +1304,8 @@ remote_buffer_dir (const Buffer *bp)
 	const char *dir = dired_directory (bp);
 	if (dir == NULL)
 		dir = shell_directory (bp);
+	if (dir == NULL)
+		dir = magit_directory (bp);
 	return xstrdup (dir != NULL ? dir : "~/");
 }
 
@@ -1351,6 +1359,55 @@ stop_remote_command (Remote *r, const StrBuf *err)
 	free (pgid);
 }
 
+/* The exit status of the command `what' that COMMAND_SCRIPT or
+   RUN_SCRIPT ran on `r' in `adir', given what ssh gave back (`ran'
+   if it finished) in `res'; its standard output up to the trailer goes
+   to `output'. Returns -1 with the error set if the command could not
+   be run in `adir' or did not finish, trying to stop it if it was
+   abandoned. */
+static int
+command_status (Remote *r, bool ran, const RunResult *res, const char *adir, const char *what, StrBuf *output)
+{
+	size_t at;
+	int ret = -1;
+	if (!ran)
+		stop_remote_command (r, &res->err);
+	else if (!find_answer (&res->out, &at)) {
+		if (res->status == 255)
+			ssh_failed (r, &res->err);
+		else if (res->status == 66)
+			set_error ("%s on ssh:%s: No such directory, or it cannot be opened", adir, r->label);
+		else {
+			char *line = last_line (&res->err);
+			set_error ("%s on ssh:%s failed: %s", what, r->label,
+				   line[0] != '\0' ? line : "the remote shell gave no answer");
+			free (line);
+		}
+	} else {
+		/* The trailer is the last line, after a newline of its own. */
+		const char *s = res->out.s + at;
+		size_t len = res->out.len - at, e = len;
+		if (e > 0 && s[e - 1] == '\n')
+			e--;
+		size_t b = e;
+		while (b > 0 && s[b - 1] != '\n')
+			b--;
+		long st;
+		char *tail = xstrndup (s + b, e - b);
+		if (b > 0 && e < len && str_has_prefix (tail, "XZ2 ") && parse_long (tail + 4, &st) && st >= 0) {
+			sb_addn (output, s, b - 1);
+			ret = (int) st;
+			note_used (r);
+		} else if (res->status == 255)
+			set_error ("%s on ssh:%s did not finish: it was killed, or the connection was lost",
+				   what, r->label);
+		else
+			set_error ("%s on ssh:%s did not finish (exit status %d)", what, r->label, res->status);
+		free (tail);
+	}
+	return ret;
+}
+
 /* Run the shell command `cmd' with sh on `r' in `dir', feeding it
    `input', with its standard output and error in `output'. Returns
    its exit status, or -1 with the error set (and `output' unchanged)
@@ -1365,49 +1422,94 @@ remote_shell_command (Remote *r, const char *dir, const char *cmd, const char *i
 		return -1;
 	const char *args[] = { adir, cmd, NULL };
 	RunResult res;
-	int ret = -1;
 	bool ok = run_remote (r, COMMAND_SCRIPT, args, input, input_len, &res, "Shell command",
 			      timeout_seconds () * 1000, true);
-	size_t at;
-	if (!ok)
-		stop_remote_command (r, &res.err);
-	else if (!find_answer (&res.out, &at)) {
-		if (res.status == 255)
-			ssh_failed (r, &res.err);
-		else if (res.status == 66)
-			set_error ("%s on ssh:%s: No such directory, or it cannot be opened", adir, r->label);
-		else {
-			char *line = last_line (&res.err);
-			set_error ("Shell command on ssh:%s failed: %s", r->label,
-				   line[0] != '\0' ? line : "the remote shell gave no answer");
-			free (line);
-		}
-	} else {
-		/* The trailer is the last line, after a newline of its own. */
-		const char *s = res.out.s + at;
-		size_t len = res.out.len - at, e = len;
-		if (e > 0 && s[e - 1] == '\n')
-			e--;
-		size_t b = e;
-		while (b > 0 && s[b - 1] != '\n')
-			b--;
-		long st;
-		char *tail = xstrndup (s + b, e - b);
-		if (b > 0 && e < len && str_has_prefix (tail, "XZ2 ") && parse_long (tail + 4, &st) && st >= 0) {
-			sb_addn (output, s, b - 1);
-			ret = (int) st;
-			note_used (r);
-		} else if (res.status == 255)
-			set_error ("Shell command on ssh:%s did not finish: it was killed, or the connection was lost",
-				   r->label);
-		else
-			set_error ("Shell command on ssh:%s did not finish (exit status %d)", r->label, res.status);
-		free (tail);
-	}
+	int ret = command_status (r, ok, &res, adir, "Shell command", output);
 	debug_log ("remote", "shell command on %s: %s", r->label, ret >= 0 ? "finished" : remote_last_error ());
 	result_free (&res);
 	free (adir);
 	return ret;
+}
+
+/* As COMMAND_SCRIPT, for the program and arguments after the
+   directory, which no shell interprets. Its error output goes to
+   standard error, after a marker there too, so that it is kept apart
+   from its output. */
+#define RUN_SCRIPT \
+	"cd \"$1\" || exit 66; shift; " \
+	"g=$(ps -o pgid= -p $$ 2>/dev/null | tr -d \" \"); " \
+	"if [ -n \"$g\" ] && { [ \"$g\" = $$ ] || [ \"$g\" = \"$PPID\" ]; }; then echo \"XZG $g\" >&2; fi; " \
+	"printf \"XZ1\\n\"; printf \"XZ1\\n\" >&2; " \
+	"\"$@\"; " \
+	"printf \"\\nXZ2 %d\\n\" $?"
+
+/* Run the program `argv' (found in the remote PATH) on `r' in `dir',
+   with its arguments as they are, feeding it `input'. Its standard
+   output goes to `out' and its standard error to `err' (either may be
+   NULL), byte for byte. Returns its exit status, or -1 with the error
+   set (and `out' and `err' unchanged) if it could not be run in `dir'
+   or did not finish; as for remote_shell_command, C-g cancels it,
+   remote-timeout bounds it, and XZile then tries to stop it there.
+   `what' names it in messages. */
+int
+remote_run (Remote *r, const char *dir, const char *const *argv, const char *input, size_t input_len,
+	    StrBuf *out, StrBuf *err, const char *what)
+{
+	clear_error ();
+	char *adir = remote_expand_path (r, dir);
+	if (adir == NULL)
+		return -1;
+	size_t n = 0;
+	while (argv[n] != NULL)
+		n++;
+	const char **args = xmalloc ((n + 2) * sizeof (char *));
+	args[0] = adir;
+	memcpy (args + 1, argv, (n + 1) * sizeof (char *));
+	RunResult res;
+	bool ok = run_remote (r, RUN_SCRIPT, args, input, input_len, &res, what, timeout_seconds () * 1000, true);
+	free (args);
+	StrBuf output;
+	sb_init (&output);
+	int ret = command_status (r, ok, &res, adir, what, &output);
+	if (ret >= 0) {
+		size_t at;
+		if (out != NULL)
+			sb_addn (out, output.s, output.len);
+		if (err != NULL && find_answer (&res.err, &at))
+			sb_addn (err, res.err.s + at, res.err.len - at);
+	}
+	if (ret >= 0)
+		debug_log ("remote", "%s on %s: exit status %d", what, r->label, ret);
+	else
+		debug_log ("remote", "%s on %s: %s", what, r->label, remote_last_error ());
+	sb_free (&output);
+	result_free (&res);
+	free (adir);
+	return ret;
+}
+
+#define START_SCRIPT "cd \"$1\" || exit 66; shift; exec \"$@\""
+
+/* The arguments to run the program `argv' on `r' in `dir' (absolute),
+   with its arguments as they are, as a process of its own whose
+   lifetime remote-timeout does not bound. Its standard input is
+   ssh's; its standard output and error are ssh's. The strings belong
+   to `keep'. */
+const char **
+remote_command_argv (Remote *r, const char *dir, const char *const *argv, StrVec *keep)
+{
+	size_t n = 0;
+	while (argv[n] != NULL)
+		n++;
+	const char **args = xmalloc ((n + 2) * sizeof (char *));
+	args[0] = dir;
+	memcpy (args + 1, argv, (n + 1) * sizeof (char *));
+	char *cmd = script_command (START_SCRIPT, args);
+	free (args);
+	const char **ssh = command_argv (r, cmd, false, keep);
+	free (cmd);
+	debug_log ("remote", "starting %s on %s in %s", argv[0], r->label, dir);
+	return ssh;
 }
 
 #define TERMINAL_CHECK_SCRIPT \

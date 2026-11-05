@@ -32,7 +32,17 @@
      --pathspec-from-file, in one git command.
    - Very large sections start collapsed.
 
-   Worker threads only run git and parse; they never touch buffers. */
+   Worker threads only run git and parse; they never touch buffers.
+
+   A repository may be on another machine, reached through remote.c:
+   git then runs there, through ssh, and the repository's buffers are
+   remote buffers of that machine. Remote commands wait for ssh while
+   reading the keyboard, on the editor's thread, so a refresh runs them
+   there one after the other (parsing still uses threads); C-g cancels
+   a remote command and remote-timeout bounds it, and a refresh whose
+   commands did not all finish keeps the buffer as it was. A
+   repository is known by its machine and its top directory: the same
+   directory here and on another machine are different repositories. */
 
 #include "xzile.h"
 
@@ -124,6 +134,12 @@ enum MagitKind {
 	MAGIT_COMMIT_MESSAGE,
 };
 
+/* A repository: its top directory, on a machine. */
+typedef struct {
+	Remote *remote;		/* The machine, or NULL for this one. */
+	char *root;
+} Repo;
+
 typedef struct {
 	char *branch;		/* NULL if detached. */
 	char *oid;		/* NULL before the first commit. */
@@ -137,7 +153,7 @@ typedef struct {
 
 struct Magit {
 	enum MagitKind kind;
-	char *root;
+	Repo repo;
 	char *args;		/* The log, diff or revision arguments. */
 	bool amend, reword, all;	/* For commit messages. */
 	Status st;
@@ -158,6 +174,25 @@ static const Mode magit_mode = { "Magit", magit_scan_line, NULL, NULL, 0 };
 static int commit_scan_line (const Mode *mode, Buffer *bp, size_t line_idx, size_t start_o,
 			     size_t len, int start_state, const char **face_names);
 static const Mode commit_mode = { "Git-Commit", commit_scan_line, NULL, NULL, 0 };
+
+static bool
+repo_eq (const Repo *a, const Repo *b)
+{
+	return a->remote == b->remote && strcmp (a->root, b->root) == 0;
+}
+
+static Repo
+repo_copy (const Repo *repo)
+{
+	return (Repo) { repo->remote, xstrdup (repo->root) };
+}
+
+static void
+repo_clear (Repo *repo)
+{
+	free (repo->root);
+	repo->root = NULL;
+}
 
 static void
 file_diff_free (FileDiff *f)
@@ -253,10 +288,31 @@ magit_free (Buffer *bp)
 	map_free (m->toggled, NULL);
 	clear_lines (m);
 	free (m->lines);
-	free (m->root);
+	free (m->repo.root);
 	free (m->args);
 	free (m);
 	bp->magit = NULL;
+}
+
+/* The top directory of the repository of a Magit buffer, or NULL. */
+const char *
+magit_directory (const Buffer *bp)
+{
+	return bp->magit != NULL ? bp->magit->repo.root : NULL;
+}
+
+/* Make `bp' a buffer of `repo'. The buffers of a remote repository
+   are remote buffers of its machine, and keep the local directory they
+   were made in. */
+static void
+set_repo (Buffer *bp, const Repo *repo, bool remote_buffer)
+{
+	bp->magit->repo = repo_copy (repo);
+	if (repo->remote == NULL) {
+		free (bp->dir);
+		bp->dir = xstrdup (repo->root);
+	} else if (remote_buffer)
+		bp->remote = repo->remote;
 }
 
 
@@ -272,34 +328,82 @@ static const char *const git_env[] = {
 	NULL
 };
 
-/* Run git with `args' in `root'. Thread-safe. */
+/* "git SUBCOMMAND", to name a remote git command in messages. */
+static char *
+git_what (const char *const *args)
+{
+	for (size_t i = 0; args[i] != NULL; i++)
+		if (strcmp (args[i], "-c") == 0 && args[i + 1] != NULL)
+			i++;
+		else if (args[i][0] != '-')
+			return xasprintf ("git %s", args[i]);
+	return xstrdup ("git");
+}
+
+/* Run git with `args' in `repo' (or in a directory of its machine).
+   Returns git's exit status, or -1 if it could not be run; on another
+   machine, also if it did not finish (cancelled, timed out or the
+   connection lost), with remote_last_error saying why. Thread-safe
+   for repositories on this machine only. */
 static int
-git_args (const char *root, const char *const *args, const char *input, size_t input_len,
+git_args (const Repo *repo, const char *const *args, const char *input, size_t input_len,
 	  StrBuf *out, StrBuf *err)
 {
-	const char *prefix[] = {
-		"git", "-C", root, "--no-pager", "-c", "core.quotepath=false",
-		"-c", "color.ui=false", "-c", "diff.noprefix=false",
+	static const char *const opts[] = {
+		"--no-pager", "-c", "core.quotepath=false", "-c", "color.ui=false", "-c", "diff.noprefix=false",
 	};
-	size_t np = sizeof prefix / sizeof prefix[0], na = 0;
+	size_t no = sizeof opts / sizeof opts[0], ne = sizeof git_env / sizeof git_env[0] - 1, na = 0;
 	while (args[na] != NULL)
 		na++;
-	const char **argv = xmalloc ((np + na + 1) * sizeof (char *));
-	memcpy (argv, prefix, np * sizeof (char *));
-	memcpy (argv + np, args, (na + 1) * sizeof (char *));
-	int status = process_run (argv, git_env, input, input_len, out, err);
+	const char **argv = xmalloc ((ne + no + na + 4) * sizeof (char *));
+	size_t k = 0;
+	if (repo->remote != NULL) {
+		/* There git runs in the directory, with env(1) setting its
+		   environment. */
+		argv[k++] = "env";
+		for (size_t i = 0; i < ne; i++)
+			argv[k++] = git_env[i];
+		argv[k++] = "git";
+	} else {
+		argv[k++] = "git";
+		argv[k++] = "-C";
+		argv[k++] = repo->root;
+	}
+	memcpy (argv + k, opts, no * sizeof (char *));
+	memcpy (argv + k + no, args, (na + 1) * sizeof (char *));
+	int status;
+	if (repo->remote != NULL) {
+		char *what = git_what (args);
+		status = remote_run (repo->remote, repo->root, argv, input, input_len, out, err, what);
+		free (what);
+	} else
+		status = process_run (argv, git_env, input, input_len, out, err);
 	free (argv);
 	return status;
 }
 
+/* Whether a git command in `repo', which gave `status', did not run
+   to completion on the repository's machine; if so, say why. */
+static bool
+remote_failed (const Repo *repo, int status)
+{
+	if (repo->remote == NULL || status >= 0)
+		return false;
+	minibuf_error ("%s", remote_last_error ());
+	return true;
+}
+
 /* Run a git query; returns its output, without a trailing newline, or
-   NULL if it failed. */
+   NULL if it failed. `*status', if not NULL, gets git_args's result. */
 static char *
-git_query (const char *root, const char *const *args)
+git_query_status (const Repo *repo, const char *const *args, int *status)
 {
 	StrBuf out;
 	sb_init (&out);
-	if (git_args (root, args, NULL, 0, &out, NULL) != 0) {
+	int st = git_args (repo, args, NULL, 0, &out, NULL);
+	if (status != NULL)
+		*status = st;
+	if (st != 0) {
 		sb_free (&out);
 		return NULL;
 	}
@@ -310,27 +414,26 @@ git_query (const char *root, const char *const *args)
 
 /* The *magit-process* buffer logs the commands that change things. */
 static Buffer *
-process_buffer (const char *root)
+process_buffer (const Repo *repo)
 {
-	char *base = path_basename (root);
+	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
+		if (bp->magit != NULL && bp->magit->kind == MAGIT_PROCESS && repo_eq (&bp->magit->repo, repo))
+			return bp;
+	char *base = path_basename (repo->root);
 	char *name = xasprintf ("magit-process: %s", base);
 	free (base);
-	Buffer *bp = buffer_find (name);
-	if (bp == NULL) {
-		bp = buffer_new (NULL);
-		bp->name = name;
-		bp->nosave = true;
-		bp->noundo = true;
-		bp->readonly = true;
-		free (bp->dir);
-		bp->dir = xstrdup (root);
-		bp->keymap = status_map;
-		bp->mode_label = xstrdup ("Magit Process");
-		bp->magit = xzalloc (sizeof (Magit));
-		bp->magit->kind = MAGIT_PROCESS;
-		bp->magit->root = xstrdup (root);
-	} else
-		free (name);
+	char *unique = buffer_unique_name (name);
+	free (name);
+	Buffer *bp = buffer_new (NULL);
+	bp->name = unique;
+	bp->nosave = true;
+	bp->noundo = true;
+	bp->readonly = true;
+	bp->keymap = status_map;
+	bp->mode_label = xstrdup ("Magit Process");
+	bp->magit = xzalloc (sizeof (Magit));
+	bp->magit->kind = MAGIT_PROCESS;
+	set_repo (bp, repo, true);
 	return bp;
 }
 
@@ -349,9 +452,9 @@ append_text (Buffer *bp, const char *s, size_t len)
 }
 
 static void
-log_command (const char *root, const char *const *args, int status, const StrBuf *out, const StrBuf *err)
+log_command (const Repo *repo, const char *const *args, int status, const StrBuf *out, const StrBuf *err)
 {
-	Buffer *bp = process_buffer (root);
+	Buffer *bp = process_buffer (repo);
 	StrBuf sb;
 	sb_init (&sb);
 	sb_addf (&sb, "%3d git", status);
@@ -368,6 +471,8 @@ log_command (const char *root, const char *const *args, int status, const StrBuf
 		if (err->s[err->len - 1] != '\n')
 			sb_addc (&sb, '\n');
 	}
+	if (status < 0 && repo->remote != NULL)
+		sb_addf (&sb, "%s\n", remote_last_error ());
 	sb_addc (&sb, '\n');
 	append_text (bp, sb.s, sb.len);
 	sb_free (&sb);
@@ -402,14 +507,14 @@ report_failure (const StrBuf *out, const StrBuf *err)
 /* Run a git command that changes things, logging it; returns true if
    it succeeded, reporting any error otherwise. */
 static bool
-git_run_input (const char *root, const char *const *args, const char *input, size_t input_len, StrBuf *out_copy)
+git_run_input (const Repo *repo, const char *const *args, const char *input, size_t input_len, StrBuf *out_copy)
 {
 	StrBuf out, err;
 	sb_init (&out);
 	sb_init (&err);
-	int status = git_args (root, args, input, input_len, &out, &err);
-	log_command (root, args, status, &out, &err);
-	if (status != 0)
+	int status = git_args (repo, args, input, input_len, &out, &err);
+	log_command (repo, args, status, &out, &err);
+	if (status != 0 && !remote_failed (repo, status))
 		report_failure (&out, &err);
 	if (out_copy != NULL && status == 0)
 		sb_add (out_copy, out.s);
@@ -419,9 +524,9 @@ git_run_input (const char *root, const char *const *args, const char *input, siz
 }
 
 static bool
-git_run (const char *root, const char *const *args)
+git_run (const Repo *repo, const char *const *args)
 {
-	return git_run_input (root, args, NULL, 0, NULL);
+	return git_run_input (repo, args, NULL, 0, NULL);
 }
 
 
@@ -434,8 +539,10 @@ typedef void (*JobFn) (Job *job);
 
 struct Job {
 	JobFn fn;
-	const char *root;
+	const Repo *repo;	/* NULL for parse jobs. */
 	const char *args[16];
+	char **argv;		/* For diff jobs, instead of `args'. */
+	bool skip;		/* Do not run git: an earlier command failed. */
 	StrBuf out;
 	int status;
 	void *result;		/* Filled in by `fn'. */
@@ -451,10 +558,26 @@ job_thread (void *p)
 	return NULL;
 }
 
-/* Run jobs concurrently, one thread each, and wait for them all. */
+/* Run jobs concurrently, one thread each, and wait for them all. The
+   jobs of a remote repository run on this thread instead, one after
+   the other, as remote commands must; once one of them could not run
+   git to completion, the others do not run it. */
 static void
 run_jobs (Job *jobs, size_t n)
 {
+	bool remote = false;
+	for (size_t i = 0; i < n; i++)
+		remote = remote || (jobs[i].repo != NULL && jobs[i].repo->remote != NULL);
+	if (remote) {
+		bool failed = false;
+		for (size_t i = 0; i < n; i++) {
+			jobs[i].skip = failed;
+			jobs[i].fn (&jobs[i]);
+			failed = failed || jobs[i].status < 0;
+		}
+		return;
+	}
+
 	pthread_t *threads = xmalloc ((n ? n : 1) * sizeof (pthread_t));
 	bool *started = xzalloc ((n ? n : 1) * sizeof (bool));
 	for (size_t i = 0; i < n; i++)
@@ -477,18 +600,24 @@ cpu_count (void)
 }
 
 static void
-query_job (Job *job)
+run_git_job (Job *job, const char *const *args)
 {
 	sb_init (&job->out);
-	job->status = git_args (job->root, job->args, NULL, 0, &job->out, NULL);
+	job->status = job->skip ? -1 : git_args (job->repo, args, NULL, 0, &job->out, NULL);
 }
 
 static void
-set_args (Job *job, const char *root, JobFn fn, const char *const *args)
+query_job (Job *job)
+{
+	run_git_job (job, job->args);
+}
+
+static void
+set_args (Job *job, const Repo *repo, JobFn fn, const char *const *args)
 {
 	memset (job, 0, sizeof *job);
 	job->fn = fn;
-	job->root = root;
+	job->repo = repo;
 	for (size_t i = 0; args[i] != NULL && i < 15; i++)
 		job->args[i] = args[i];
 }
@@ -665,7 +794,7 @@ parse_diff_parallel (const char *s, size_t len, FileList *out)
 static void
 diff_job (Job *job)
 {
-	query_job (job);
+	run_git_job (job, (const char *const *) job->argv);
 	FileList *fl = xzalloc (sizeof (FileList));
 	if (job->status == 0)
 		parse_diff_parallel (job->out.s, job->out.len, fl);
@@ -731,8 +860,10 @@ status_job (Job *job)
 	query_job (job);
 	Status *st = xzalloc (sizeof (Status));
 	job->result = st;
-	if (job->status != 0)
+	if (job->status != 0) {
+		sb_free (&job->out);
 		return;
+	}
 
 	const char *s = job->out.s, *end = s + job->out.len;
 	while (s < end) {
@@ -1292,7 +1423,7 @@ attach_diffs (FileList *fl, FileList *diffs)
 
 /* Prepare a job fetching the diffs of `paths' (all if `all'). */
 static void
-setup_diff_job (Job *job, const char *root, bool cached, const StrVec *paths, bool all, char ***argv_out)
+setup_diff_job (Job *job, const Repo *repo, bool cached, const StrVec *paths, bool all, char ***argv_out)
 {
 	size_t n = all ? 0 : paths->n;
 	char **argv = xmalloc ((n + 8) * sizeof (char *));
@@ -1308,34 +1439,53 @@ setup_diff_job (Job *job, const char *root, bool cached, const StrVec *paths, bo
 	argv[k] = NULL;
 	memset (job, 0, sizeof *job);
 	job->fn = diff_job;
-	job->root = root;
-	/* Diff jobs take their arguments from `argv_out', which may be long. */
+	job->repo = repo;
+	/* Diff jobs take their arguments from `argv', which may be long. */
+	job->argv = argv;
 	*argv_out = argv;
-}
-
-static void
-diff_argv_job (Job *job)
-{
-	char **argv = job->result;
-	job->result = NULL;
-	sb_init (&job->out);
-	job->status = git_args (job->root, (const char *const *) argv, NULL, 0, &job->out, NULL);
-	FileList *fl = xzalloc (sizeof (FileList));
-	if (job->status == 0)
-		parse_diff_parallel (job->out.s, job->out.len, fl);
-	sb_free (&job->out);
-	job->result = fl;
 }
 
 enum { J_STATUS, J_HEAD, J_UPSTREAM_HEAD, J_UNPUSHED, J_UNPULLED, J_RECENT, J_STASHES, J_MERGING,
        J_UNSTAGED_DIFF, J_STAGED_DIFF, NJOBS };
 
-/* Refresh a status buffer; `all_diffs' fetches every file's diff. */
+/* Free what the jobs of a status refresh found. */
 static void
+free_status_results (Job *jobs, size_t njobs)
+{
+	for (size_t i = 0; i < njobs; i++) {
+		void *res = jobs[i].result;
+		if (res == NULL)
+			continue;
+		switch (i) {
+		case J_STATUS:
+			status_clear (res);
+			break;
+		case J_UNPUSHED:
+		case J_UNPULLED:
+		case J_RECENT:
+		case J_STASHES:
+			sv_clear (res);
+			break;
+		case J_HEAD:
+		case J_UPSTREAM_HEAD:
+		case J_MERGING:
+			break;
+		default:
+			file_list_clear (res);
+			break;
+		}
+		free (res);
+	}
+}
+
+/* Refresh a status buffer; `all_diffs' fetches every file's diff.
+   Returns false, leaving the buffer as it was, if the commands of a
+   remote repository did not all run to completion. */
+static bool
 refresh_status (Buffer *bp, bool all_diffs)
 {
 	Magit *m = bp->magit;
-	const char *root = m->root;
+	const Repo *repo = &m->repo;
 	int64_t start = monotonic_ms ();
 
 	StrVec unstaged_paths = { NULL, 0, 0 }, staged_paths = { NULL, 0, 0 };
@@ -1346,42 +1496,45 @@ refresh_status (Buffer *bp, bool all_diffs)
 	bool staged_all = all_diffs || staged_paths.n > MAX_PATHS_PER_DIFF;
 
 	Job jobs[NJOBS];
-	set_args (&jobs[J_STATUS], root, status_job, (const char *[]) {
+	set_args (&jobs[J_STATUS], repo, status_job, (const char *[]) {
 			"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", NULL });
-	set_args (&jobs[J_HEAD], root, string_job, (const char *[]) {
+	set_args (&jobs[J_HEAD], repo, string_job, (const char *[]) {
 			"log", "-1", "--no-show-signature", "--format=%h %s", NULL });
-	set_args (&jobs[J_UPSTREAM_HEAD], root, string_job, (const char *[]) {
+	set_args (&jobs[J_UPSTREAM_HEAD], repo, string_job, (const char *[]) {
 			"log", "-1", "--no-show-signature", "--format=%h %s", "@{upstream}", NULL });
-	set_args (&jobs[J_UNPUSHED], root, lines_job, (const char *[]) {
+	set_args (&jobs[J_UNPUSHED], repo, lines_job, (const char *[]) {
 			"log", "--no-show-signature", "--format=%h %s", "-n", LOG_LIMIT, "@{upstream}..HEAD", NULL });
-	set_args (&jobs[J_UNPULLED], root, lines_job, (const char *[]) {
+	set_args (&jobs[J_UNPULLED], repo, lines_job, (const char *[]) {
 			"log", "--no-show-signature", "--format=%h %s", "-n", LOG_LIMIT, "HEAD..@{upstream}", NULL });
-	set_args (&jobs[J_RECENT], root, lines_job, (const char *[]) {
+	set_args (&jobs[J_RECENT], repo, lines_job, (const char *[]) {
 			"log", "--no-show-signature", "--format=%h %s", "-n", "10", NULL });
-	set_args (&jobs[J_STASHES], root, lines_job, (const char *[]) {
+	set_args (&jobs[J_STASHES], repo, lines_job, (const char *[]) {
 			"stash", "list", "--format=%gd %gs", NULL });
-	set_args (&jobs[J_MERGING], root, string_job, (const char *[]) {
+	set_args (&jobs[J_MERGING], repo, string_job, (const char *[]) {
 			"log", "-1", "--no-show-signature", "--format=%h %s", "MERGE_HEAD", NULL });
 
 	size_t njobs = J_UNSTAGED_DIFF;
 	char **argv_unstaged = NULL, **argv_staged = NULL;
-	if (unstaged_all || unstaged_paths.n > 0) {
-		setup_diff_job (&jobs[njobs], root, false, &unstaged_paths, unstaged_all, &argv_unstaged);
-		jobs[njobs].fn = diff_argv_job;
-		jobs[njobs].result = argv_unstaged;
-		njobs++;
-	}
+	if (unstaged_all || unstaged_paths.n > 0)
+		setup_diff_job (&jobs[njobs++], repo, false, &unstaged_paths, unstaged_all, &argv_unstaged);
 	size_t staged_job = njobs;
-	if (staged_all || staged_paths.n > 0) {
-		setup_diff_job (&jobs[njobs], root, true, &staged_paths, staged_all, &argv_staged);
-		jobs[njobs].fn = diff_argv_job;
-		jobs[njobs].result = argv_staged;
-		njobs++;
-	}
+	if (staged_all || staged_paths.n > 0)
+		setup_diff_job (&jobs[njobs++], repo, true, &staged_paths, staged_all, &argv_staged);
 
 	run_jobs (jobs, njobs);
 	free (argv_unstaged);
 	free (argv_staged);
+
+	bool failed = false;
+	for (size_t i = 0; i < njobs; i++)
+		failed = failed || jobs[i].status < 0;
+	if (repo->remote != NULL && failed) {
+		free_status_results (jobs, njobs);
+		sv_clear (&unstaged_paths);
+		sv_clear (&staged_paths);
+		minibuf_error ("%s", remote_last_error ());
+		return false;
+	}
 
 	status_clear (&m->st);
 	Status *st = jobs[J_STATUS].result;
@@ -1448,19 +1601,26 @@ refresh_status (Buffer *bp, bool all_diffs)
 		   m->st.unstaged.n, m->st.staged.n, m->st.untracked.n, m->nlines);
 	if (elapsed > 1000)
 		minibuf_write ("Refreshing magit buffer...done (%.2fs)", (double) elapsed / 1000.0);
+	return true;
 }
 
-/* Fetch one file's diff, when it is expanded. */
-static void
+/* Fetch one file's diff, when it is expanded; false, saying why, if
+   git did not run to completion on the repository's machine. */
+static bool
 load_file_diff (Magit *m, enum Section sec, FileDiff *f)
 {
 	if (f->has_diff || sec == SEC_UNTRACKED)
-		return;
+		return true;
 	StrBuf out;
 	sb_init (&out);
 	const char *args[] = { "diff", "--no-ext-diff", "--no-color", sec == SEC_STAGED ? "--cached" : "--",
 			       sec == SEC_STAGED ? "--" : f->path, sec == SEC_STAGED ? f->path : NULL, NULL };
-	if (git_args (m->root, args, NULL, 0, &out, NULL) == 0) {
+	int status = git_args (&m->repo, args, NULL, 0, &out, NULL);
+	if (remote_failed (&m->repo, status)) {
+		sb_free (&out);
+		return false;
+	}
+	if (status == 0) {
 		FileList fl = { NULL, 0, 0 };
 		parse_diff_parallel (out.s, out.len, &fl);
 		FileList one = { NULL, 0, 0 };
@@ -1472,18 +1632,20 @@ load_file_diff (Magit *m, enum Section sec, FileDiff *f)
 		free (one.v);
 	}
 	sb_free (&out);
+	return true;
 }
 
-static void
+/* Refresh a Magit buffer; false, leaving it as it was, if git did not
+   run to completion on the repository's machine. */
+static bool
 refresh_buffer (Buffer *bp)
 {
 	Magit *m = bp->magit;
 	if (m == NULL)
-		return;
+		return true;
 	switch (m->kind) {
 	case MAGIT_STATUS:
-		refresh_status (bp, false);
-		break;
+		return refresh_status (bp, false);
 	case MAGIT_LOG: {
 		StrBuf out;
 		sb_init (&out);
@@ -1494,8 +1656,12 @@ refresh_buffer (Buffer *bp)
 		for (char *tok = copy != NULL ? strtok (copy, " ") : NULL; tok != NULL && k < 15; tok = strtok (NULL, " "))
 			args[k++] = tok;
 		args[k] = NULL;
-		git_args (m->root, args, NULL, 0, &out, NULL);
+		int status = git_args (&m->repo, args, NULL, 0, &out, NULL);
 		free (copy);
+		if (remote_failed (&m->repo, status)) {
+			sb_free (&out);
+			return false;
+		}
 		sv_clear (&m->log);
 		for (const char *p = out.s; *p != '\0';) {
 			size_t n = strcspn (p, "\n");
@@ -1534,8 +1700,12 @@ refresh_buffer (Buffer *bp)
 		for (char *tok = strtok (copy, " "); tok != NULL && k < 22; tok = strtok (NULL, " "))
 			args[k++] = tok;
 		args[k] = NULL;
-		git_args (m->root, args, NULL, 0, &out, NULL);
+		int status = git_args (&m->repo, args, NULL, 0, &out, NULL);
 		free (copy);
+		if (remote_failed (&m->repo, status)) {
+			sb_free (&out);
+			return false;
+		}
 
 		file_list_clear (&m->files);
 		sv_clear (&m->header);
@@ -1562,28 +1732,30 @@ refresh_buffer (Buffer *bp)
 	default:
 		break;
 	}
+	return true;
 }
 
-/* Refresh the status buffer of `root', if there is one. */
+/* Refresh the status buffer of `repo', if there is one. */
 static void
-refresh_status_of (const char *root)
+refresh_status_of (const Repo *repo)
 {
-	/* Git may have rewritten visited files. */
-	buffers_check_disk (true);
+	/* Git may have rewritten visited files. Remote buffers are
+	   checked when saved instead. */
+	if (repo->remote == NULL)
+		buffers_check_disk (true);
 	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
-		if (bp->magit != NULL && bp->magit->kind == MAGIT_STATUS && strcmp (bp->magit->root, root) == 0)
+		if (bp->magit != NULL && bp->magit->kind == MAGIT_STATUS && repo_eq (&bp->magit->repo, repo))
 			refresh_status (bp, false);
 }
 
 static void
-refresh_after_change (const char *root)
+refresh_after_change (const Repo *repo)
 {
-	char *r = xstrdup (root);
-	refresh_status_of (r);
+	refresh_status_of (repo);
 	if (cur_bp->magit != NULL && cur_bp->magit->kind != MAGIT_STATUS &&
-	    cur_bp->magit->kind != MAGIT_PROCESS && cur_bp->magit->kind != MAGIT_COMMIT_MESSAGE)
+	    cur_bp->magit->kind != MAGIT_PROCESS && cur_bp->magit->kind != MAGIT_COMMIT_MESSAGE &&
+	    repo_eq (&cur_bp->magit->repo, repo))
 		refresh_buffer (cur_bp);
-	free (r);
 }
 
 
@@ -1591,73 +1763,95 @@ refresh_after_change (const char *root)
  * Buffers.
  *--------------------------------------------------------------------------*/
 
-/* The root of the repository containing `dir', or NULL. */
-static char *
-repository_root (const char *dir)
+/* Find the repository containing `dir' on `r' (NULL for this
+   machine) and put it in `*repo'; false, saying why, if there is
+   none. */
+static bool
+find_repo (Remote *r, const char *dir, Repo *repo)
 {
-	const char *args[] = { "rev-parse", "--show-toplevel", NULL };
-	return git_query (dir, args);
+	Repo where = { r, (char *) dir };
+	int status;
+	char *root = git_query_status (&where, (const char *[]) { "rev-parse", "--show-toplevel", NULL }, &status);
+	if (root == NULL || root[0] == '\0') {
+		free (root);
+		if (!remote_failed (&where, status))
+			minibuf_error ("Not inside a Git repository%s%s", r != NULL ? " on ssh:" : "",
+				       r != NULL ? remote_label (r) : "");
+		return false;
+	}
+	*repo = (Repo) { r, root };
+	return true;
 }
 
-static char *
-current_root (void)
+/* The repository of the current buffer: a Magit buffer's own, or the
+   one containing the buffer's directory, on the buffer's machine. */
+static bool
+current_repo (Repo *repo)
 {
-	if (cur_bp->magit != NULL)
-		return xstrdup (cur_bp->magit->root);
-	if (remote_refuse (cur_bp, "Magit"))
-		return NULL;
-	char *root = repository_root (cur_bp->dir);
-	if (root == NULL)
-		minibuf_error ("Not inside a Git repository");
-	return root;
+	if (cur_bp->magit != NULL) {
+		*repo = repo_copy (&cur_bp->magit->repo);
+		return true;
+	}
+	if (cur_bp->remote != NULL) {
+		char *dir = remote_buffer_dir (cur_bp);
+		bool ok = find_repo (cur_bp->remote, dir, repo);
+		free (dir);
+		return ok;
+	}
+	return find_repo (NULL, cur_bp->dir, repo);
 }
 
+/* The Magit buffer of `kind' for `repo', made if there is none. */
 static Buffer *
-magit_buffer (const char *prefix, const char *root, enum MagitKind kind, const char *args, bool *created)
+magit_buffer (const char *prefix, const Repo *repo, enum MagitKind kind, bool *created)
 {
-	char *base = path_basename (root);
+	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
+		if (bp->magit != NULL && bp->magit->kind == kind && repo_eq (&bp->magit->repo, repo)) {
+			*created = false;
+			return bp;
+		}
+	*created = true;
+	char *base = path_basename (repo->root);
 	char *name = xasprintf ("%s: %s", prefix, base);
 	free (base);
-	Buffer *bp = buffer_find (name);
-	*created = bp == NULL;
-	if (bp != NULL && (bp->magit == NULL || strcmp (bp->magit->root, root) != 0)) {
-		char *unique = buffer_unique_name (name);
-		free (name);
-		name = unique;
-		bp = NULL;
-		*created = true;
-	}
-	if (bp == NULL) {
-		bp = buffer_new (NULL);
-		bp->name = name;
-		bp->nosave = true;
-		bp->noundo = true;
-		bp->readonly = true;
-		free (bp->dir);
-		bp->dir = xstrdup (root);
-		bp->keymap = status_map;
-		buffer_set_highlighter (bp, &magit_mode);
-		bp->magit = xzalloc (sizeof (Magit));
-		bp->magit->kind = kind;
-		bp->magit->root = xstrdup (root);
-		static const char *const labels[] = { "Magit", "Magit Log", "Magit Rev", "Magit Diff" };
-		bp->mode_label = xstrdup (labels[kind]);
-	} else
-		free (name);
-	free (bp->magit->args);
-	bp->magit->args = xstrdup_or_null (args);
+	char *unique = buffer_unique_name (name);
+	free (name);
+	Buffer *bp = buffer_new (NULL);
+	bp->name = unique;
+	bp->nosave = true;
+	bp->noundo = true;
+	bp->readonly = true;
+	bp->keymap = status_map;
+	buffer_set_highlighter (bp, &magit_mode);
+	bp->magit = xzalloc (sizeof (Magit));
+	bp->magit->kind = kind;
+	set_repo (bp, repo, true);
+	static const char *const labels[] = { "Magit", "Magit Log", "Magit Rev", "Magit Diff" };
+	bp->mode_label = xstrdup (labels[kind]);
 	return bp;
 }
 
-/* Show a Magit buffer for `root' and refresh it. */
+/* Show a Magit buffer for `repo' and refresh it. If the refresh fails,
+   a new buffer goes, and an old one is left as it was. */
 static bool
-show_magit_buffer (const char *prefix, const char *root, enum MagitKind kind, const char *args)
+show_magit_buffer (const char *prefix, const Repo *repo, enum MagitKind kind, const char *args)
 {
 	bool created;
-	Buffer *bp = magit_buffer (prefix, root, kind, args, &created);
+	Buffer *bp = magit_buffer (prefix, repo, kind, &created);
 	if (created && kind != MAGIT_STATUS)
 		file_list_clear (&bp->magit->files);
-	refresh_buffer (bp);
+	char *old_args = bp->magit->args;
+	bp->magit->args = xstrdup_or_null (args);
+	if (!refresh_buffer (bp)) {
+		if (created)
+			buffer_kill (bp);
+		else {
+			free (bp->magit->args);
+			bp->magit->args = old_args;
+		}
+		return false;
+	}
+	free (old_args);
 	if (created)
 		buffer_goto_offset (bp, 0);
 	buffer_switch_to (bp, true);
@@ -1679,21 +1873,33 @@ check_magit (void)
 	return true;
 }
 
+/* Without a directory, the repository of the current buffer. A
+   directory is on the current buffer's machine, and a relative one is
+   relative to the buffer's directory there. */
 static bool
 F_magit_status (long uniarg, Args *args)
 {
 	(void) uniarg;
 	char *dir = xstrdup_or_null (args_poll (args));
-	if (dir == NULL && remote_refuse (cur_bp, "magit-status"))
-		return false;
-	char *root = repository_root (dir != NULL ? dir : cur_bp->dir);
-	free (dir);
-	if (root == NULL) {
-		minibuf_error ("Not inside a Git repository");
-		return false;
+	Repo repo;
+	bool found;
+	if (dir == NULL)
+		found = current_repo (&repo);
+	else {
+		Remote *r = cur_bp->remote;
+		char *start = r != NULL ? remote_buffer_dir (cur_bp) : xstrdup (cur_bp->dir);
+		char *where = dir[0] == '/' || dir[0] == '~' ? xstrdup (dir) : path_join (start, dir);
+		char *full = r == NULL ? expand_path (where) : NULL;
+		found = find_repo (r, full != NULL ? full : where, &repo);
+		free (full);
+		free (where);
+		free (start);
 	}
-	bool ok = show_magit_buffer ("magit", root, MAGIT_STATUS, NULL);
-	free (root);
+	free (dir);
+	if (!found)
+		return false;
+	bool ok = show_magit_buffer ("magit", &repo, MAGIT_STATUS, NULL);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -1704,8 +1910,7 @@ F_magit_refresh (long uniarg, Args *args)
 	(void) args;
 	if (!check_magit ())
 		return false;
-	refresh_buffer (cur_bp);
-	return true;
+	return refresh_buffer (cur_bp);
 }
 
 static bool
@@ -1725,9 +1930,8 @@ F_magit_section_toggle (long uniarg, Args *args)
 		m->collapsed_set[li->sec] = true;
 	} else if (li->kind == L_FILE) {
 		FileDiff *f = line_file (m, li);
-		if (f == NULL || li->sec == SEC_UNTRACKED)
+		if (f == NULL || li->sec == SEC_UNTRACKED || !load_file_diff (m, li->sec, f))
 			return false;
-		load_file_diff (m, li->sec, f);
 		char *key = toggle_key (li->sec, f->path, NULL);
 		toggle (m, key);
 		free (key);
@@ -1758,8 +1962,7 @@ F_magit_show_level_4 (long uniarg, Args *args)
 	(void) args;
 	if (!check_magit () || cur_bp->magit->kind != MAGIT_STATUS)
 		return false;
-	refresh_status (cur_bp, true);
-	return true;
+	return refresh_status (cur_bp, true);
 }
 
 static bool
@@ -1840,9 +2043,35 @@ hunk_target_line (const Hunk *h, int k)
 }
 
 static bool
-show_revision (const char *root, const char *rev)
+show_revision (const Repo *repo, const char *rev)
 {
-	return show_magit_buffer ("magit-revision", root, MAGIT_REVISION, rev);
+	return show_magit_buffer ("magit-revision", repo, MAGIT_REVISION, rev);
+}
+
+/* Visit `path' (absolute) of the repository of `m', a file or a
+   directory, on the repository's machine. */
+static bool
+visit_repo_file (Magit *m, const char *path, const char *shown)
+{
+	Remote *r = m->repo.remote;
+	if (r == NULL) {
+		if (!file_exists (path)) {
+			minibuf_error ("File `%s' does not exist", shown);
+			return false;
+		}
+		return file_is_dir (path) ? dired (path) : find_file (path);
+	}
+	int status = remote_run (r, m->repo.root, (const char *[]) { "test", "-e", path, NULL }, NULL, 0,
+				 NULL, NULL, "Checking a file");
+	if (status < 0) {
+		minibuf_error ("%s", remote_last_error ());
+		return false;
+	}
+	if (status != 0) {
+		minibuf_error ("File `%s' does not exist on ssh:%s", shown, remote_label (r));
+		return false;
+	}
+	return find_file_remote (r, path);
 }
 
 static bool
@@ -1858,9 +2087,10 @@ F_magit_visit_thing (long uniarg, Args *args)
 		return false;
 
 	if ((li->kind == L_COMMIT || li->kind == L_STASH || li->kind == L_TEXT) && li->ref != NULL) {
-		char *root = xstrdup (m->root), *ref = xstrdup (li->ref);
-		bool ok = show_revision (root, ref);
-		free (root);
+		Repo repo = repo_copy (&m->repo);
+		char *ref = xstrdup (li->ref);
+		bool ok = show_revision (&repo, ref);
+		repo_clear (&repo);
 		free (ref);
 		return ok;
 	}
@@ -1870,16 +2100,11 @@ F_magit_visit_thing (long uniarg, Args *args)
 	FileDiff *f = line_file (m, li);
 	if (f == NULL)
 		return false;
-	char *path = path_join (m->root, f->path);
+	char *path = path_join (m->repo.root, f->path);
 	long line = 1;
 	if ((li->kind == L_HUNK || li->kind == L_DIFF) && li->hunk >= 0)
 		line = hunk_target_line (&f->hunks[li->hunk], li->line);
-	if (!file_exists (path)) {
-		minibuf_error ("File `%s' does not exist", f->path);
-		free (path);
-		return false;
-	}
-	bool ok = file_is_dir (path) ? dired (path) : find_file (path);
+	bool ok = visit_repo_file (m, path, f->path);
 	free (path);
 	if (ok && cur_bp->dired == NULL) {
 		buffer_goto_offset (cur_bp, 0);
@@ -1930,7 +2155,7 @@ selected_files (Magit *m, StrVec *paths)
 /* Run `git ARGS... -- PATHS...', in batches to stay within the
    argument length limit, for commands without --pathspec-from-file. */
 static bool
-git_on_path_args (const char *root, const char *const *args, const StrVec *paths)
+git_on_path_args (const Repo *repo, const char *const *args, const StrVec *paths)
 {
 	enum { BATCH = 256 };
 	size_t na = 0;
@@ -1946,7 +2171,7 @@ git_on_path_args (const char *root, const char *const *args, const StrVec *paths
 		for (size_t j = i; j < paths->n && j < i + BATCH; j++)
 			argv[k++] = paths->v[j];
 		argv[k] = NULL;
-		ok = git_run (root, argv);
+		ok = git_run (repo, argv);
 	}
 	free (argv);
 	return ok;
@@ -1956,7 +2181,7 @@ git_on_path_args (const char *root, const char *const *args, const StrVec *paths
    `paths', which are passed on standard input however many there are.
    `args' must not end with "--". */
 static bool
-git_on_paths (const char *root, const char *const *args, const StrVec *paths)
+git_on_paths (const Repo *repo, const char *const *args, const StrVec *paths)
 {
 	const char *argv[16];
 	size_t k = 0;
@@ -1969,7 +2194,7 @@ git_on_paths (const char *root, const char *const *args, const StrVec *paths)
 	sb_init (&in);
 	for (size_t i = 0; i < paths->n; i++)
 		sb_addn (&in, paths->v[i], strlen (paths->v[i]) + 1);
-	bool ok = git_run_input (root, argv, in.s, in.len, NULL);
+	bool ok = git_run_input (repo, argv, in.s, in.len, NULL);
 	sb_free (&in);
 	return ok;
 }
@@ -1988,7 +2213,7 @@ apply_hunk (Magit *m, const LineInfo *li, const char *const *args)
 	if (f == NULL || li->hunk < 0)
 		return false;
 	char *patch = hunk_patch (f, &f->hunks[li->hunk]);
-	bool ok = git_run_input (m->root, args, patch, strlen (patch), NULL);
+	bool ok = git_run_input (&m->repo, args, patch, strlen (patch), NULL);
 	free (patch);
 	return ok;
 }
@@ -2001,7 +2226,7 @@ F_magit_stage (long uniarg, Args *args)
 	if (!check_magit () || cur_bp->magit->kind != MAGIT_STATUS)
 		return false;
 	Magit *m = cur_bp->magit;
-	char *root = xstrdup (m->root);
+	Repo repo = repo_copy (&m->repo);
 	const LineInfo *li = current_line ();
 	bool ok = false;
 
@@ -2010,10 +2235,10 @@ F_magit_stage (long uniarg, Args *args)
 	else if (li != NULL && li->kind == L_HEADING) {
 		StrVec paths = { NULL, 0, 0 };
 		if (li->sec == SEC_UNSTAGED)
-			ok = git_run (root, (const char *[]) { "add", "-u", NULL });
+			ok = git_run (&repo, (const char *[]) { "add", "-u", NULL });
 		else if (li->sec == SEC_UNTRACKED || li->sec == SEC_UNMERGED) {
 			section_paths (section_files (m, li->sec), &paths);
-			ok = git_on_paths (root, (const char *[]) { "add", "-A", NULL }, &paths);
+			ok = git_on_paths (&repo, (const char *[]) { "add", "-A", NULL }, &paths);
 		} else
 			minibuf_error ("Nothing to stage here");
 		sv_clear (&paths);
@@ -2025,12 +2250,12 @@ F_magit_stage (long uniarg, Args *args)
 		else if (paths.n == 0)
 			minibuf_error ("Nothing to stage here");
 		else
-			ok = git_on_paths (root, (const char *[]) { "add", "-A", NULL }, &paths);
+			ok = git_on_paths (&repo, (const char *[]) { "add", "-A", NULL }, &paths);
 		sv_clear (&paths);
 	}
 	cur_bp->mark_active = false;
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2039,21 +2264,21 @@ F_magit_stage_modified (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
-	bool ok = git_run (root, (const char *[]) { "add", "-u", NULL });
-	refresh_status_of (root);
-	free (root);
+	bool ok = git_run (&repo, (const char *[]) { "add", "-u", NULL });
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
 static bool
-unstage_all (Magit *m, const char *root)
+unstage_all (Magit *m, const Repo *repo)
 {
 	if (m->st.oid == NULL)
-		return git_run (root, (const char *[]) { "rm", "--cached", "-r", "-q", "--", ".", NULL });
-	return git_run (root, (const char *[]) { "reset", "-q", "--", ".", NULL });
+		return git_run (repo, (const char *[]) { "rm", "--cached", "-r", "-q", "--", ".", NULL });
+	return git_run (repo, (const char *[]) { "reset", "-q", "--", ".", NULL });
 }
 
 static bool
@@ -2064,28 +2289,28 @@ F_magit_unstage (long uniarg, Args *args)
 	if (!check_magit () || cur_bp->magit->kind != MAGIT_STATUS)
 		return false;
 	Magit *m = cur_bp->magit;
-	char *root = xstrdup (m->root);
+	Repo repo = repo_copy (&m->repo);
 	const LineInfo *li = current_line ();
 	bool ok = false;
 
 	if (li != NULL && (li->kind == L_HUNK || li->kind == L_DIFF) && li->sec == SEC_STAGED)
 		ok = apply_hunk (m, li, (const char *[]) { "apply", "--cached", "--reverse", "-", NULL });
 	else if (li != NULL && li->kind == L_HEADING && li->sec == SEC_STAGED)
-		ok = unstage_all (m, root);
+		ok = unstage_all (m, &repo);
 	else {
 		StrVec paths = { NULL, 0, 0 };
 		enum Section sec = selected_files (m, &paths);
 		if (sec != SEC_STAGED || paths.n == 0)
 			minibuf_error ("Nothing to unstage here");
 		else if (m->st.oid == NULL)
-			ok = git_on_paths (root, (const char *[]) { "rm", "--cached", "-r", "-q", NULL }, &paths);
+			ok = git_on_paths (&repo, (const char *[]) { "rm", "--cached", "-r", "-q", NULL }, &paths);
 		else
-			ok = git_on_paths (root, (const char *[]) { "reset", "-q", NULL }, &paths);
+			ok = git_on_paths (&repo, (const char *[]) { "reset", "-q", NULL }, &paths);
 		sv_clear (&paths);
 	}
 	cur_bp->mark_active = false;
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2096,10 +2321,10 @@ F_magit_unstage_all (long uniarg, Args *args)
 	(void) args;
 	if (!check_magit () || cur_bp->magit->kind != MAGIT_STATUS)
 		return false;
-	char *root = xstrdup (cur_bp->magit->root);
-	bool ok = unstage_all (cur_bp->magit, root);
-	refresh_status_of (root);
-	free (root);
+	Repo repo = repo_copy (&cur_bp->magit->repo);
+	bool ok = unstage_all (cur_bp->magit, &repo);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2111,7 +2336,7 @@ F_magit_discard (long uniarg, Args *args)
 	if (!check_magit () || cur_bp->magit->kind != MAGIT_STATUS)
 		return false;
 	Magit *m = cur_bp->magit;
-	char *root = xstrdup (m->root);
+	Repo repo = repo_copy (&m->repo);
 	const LineInfo *li = current_line ();
 	bool ok = false;
 
@@ -2126,12 +2351,12 @@ F_magit_discard (long uniarg, Args *args)
 			if (minibuf_read_y_or_n ("Delete all %zu untracked files? ", m->st.untracked.n) == 1) {
 				StrVec paths = { NULL, 0, 0 };
 				section_paths (&m->st.untracked, &paths);
-				ok = git_on_path_args (root, (const char *[]) { "clean", "-f", "-d", "-q", NULL }, &paths);
+				ok = git_on_path_args (&repo, (const char *[]) { "clean", "-f", "-d", "-q", NULL }, &paths);
 				sv_clear (&paths);
 			}
 		} else if (li->sec == SEC_UNSTAGED) {
 			if (minibuf_read_y_or_n ("Discard all unstaged changes? ") == 1)
-				ok = git_run (root, (const char *[]) { "checkout", "--", ".", NULL });
+				ok = git_run (&repo, (const char *[]) { "checkout", "--", ".", NULL });
 		} else
 			minibuf_error ("Cannot discard this section");
 	} else {
@@ -2145,9 +2370,9 @@ F_magit_discard (long uniarg, Args *args)
 			minibuf_error ("Nothing to discard here");
 		else if (ans == 1) {
 			if (sec == SEC_UNTRACKED)
-				ok = git_on_path_args (root, (const char *[]) { "clean", "-f", "-d", "-q", NULL }, &paths);
+				ok = git_on_path_args (&repo, (const char *[]) { "clean", "-f", "-d", "-q", NULL }, &paths);
 			else if (sec == SEC_UNSTAGED)
-				ok = git_on_paths (root, (const char *[]) { "checkout", NULL }, &paths);
+				ok = git_on_paths (&repo, (const char *[]) { "checkout", NULL }, &paths);
 			else if (sec == SEC_STAGED) {
 				/* New files go; others return to HEAD. */
 				StrVec added = { NULL, 0, 0 }, existing = { NULL, 0, 0 };
@@ -2160,9 +2385,9 @@ F_magit_discard (long uniarg, Args *args)
 						}
 				ok = true;
 				if (added.n > 0)
-					ok = git_on_paths (root, (const char *[]) { "rm", "-f", "-q", NULL }, &added);
+					ok = git_on_paths (&repo, (const char *[]) { "rm", "-f", "-q", NULL }, &added);
 				if (ok && existing.n > 0)
-					ok = git_on_paths (root, (const char *[]) { "checkout", "HEAD", NULL }, &existing);
+					ok = git_on_paths (&repo, (const char *[]) { "checkout", "HEAD", NULL }, &existing);
 				sv_clear (&added);
 				sv_clear (&existing);
 			} else
@@ -2171,8 +2396,8 @@ F_magit_discard (long uniarg, Args *args)
 		sv_clear (&paths);
 	}
 	cur_bp->mark_active = false;
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2225,12 +2450,15 @@ transient (const char *title, const Action *actions, size_t n)
 #define ACTIONS(a) a, sizeof a / sizeof a[0]
 
 static char *
-read_ref (const char *root, const char *prompt, const char *def, bool remotes)
+read_ref (const Repo *repo, const char *prompt, const char *def, bool remotes)
 {
-	Completion *cp = completion_new (false);
 	const char *args[] = { "for-each-ref", "--format=%(refname:short)", "refs/heads",
 			       remotes ? "refs/remotes" : NULL, NULL };
-	char *refs = git_query (root, args);
+	int status;
+	char *refs = git_query_status (repo, args, &status);
+	if (remote_failed (repo, status))
+		return NULL;
+	Completion *cp = completion_new (false);
 	for (char *p = refs, *tok; p != NULL && (tok = strsep (&p, "\n")) != NULL;)
 		if (*tok != '\0')
 			sv_add_sorted (&cp->completions, tok);
@@ -2272,17 +2500,21 @@ ref_at_point (void)
 	return ref;
 }
 
-static char *
-current_branch (const char *root)
+/* The current branch of `repo' goes to `*branch' (NULL if detached);
+   false, saying why, if git did not run to completion there. */
+static bool
+current_branch (const Repo *repo, char **branch)
 {
-	return git_query (root, (const char *[]) { "symbolic-ref", "--short", "-q", "HEAD", NULL });
+	int status;
+	*branch = git_query_status (repo, (const char *[]) { "symbolic-ref", "--short", "-q", "HEAD", NULL }, &status);
+	return !remote_failed (repo, status);
 }
 
 
 /* Running long commands asynchronously. */
 
 typedef struct {
-	char *root;
+	Repo repo;
 	char *what;
 } AsyncGit;
 
@@ -2291,7 +2523,7 @@ async_output (Process *p, const char *data, size_t len, void *owner)
 {
 	(void) p;
 	AsyncGit *a = owner;
-	Buffer *bp = process_buffer (a->root);
+	Buffer *bp = process_buffer (&a->repo);
 	/* Show progress meters' last state rather than every update. */
 	StrBuf sb;
 	sb_init (&sb);
@@ -2310,31 +2542,39 @@ async_exit (Process *p, int status, void *owner)
 	AsyncGit *a = owner;
 	int code = WIFEXITED (status) ? WEXITSTATUS (status) : 128;
 	char *msg = xasprintf ("%3d (exit status)\n\n", code);
-	append_text (process_buffer (a->root), msg, strlen (msg));
+	append_text (process_buffer (&a->repo), msg, strlen (msg));
 	free (msg);
 	if (code == 0)
 		minibuf_write ("Git %s...done", a->what);
 	else
 		minibuf_error ("Git %s failed (see $ for details)", a->what);
-	refresh_status_of (a->root);
-	free (a->root);
+	refresh_status_of (&a->repo);
+	repo_clear (&a->repo);
 	free (a->what);
 	free (a);
 	process_free (p);
 }
 
 static bool
-git_async (const char *root, const char *what, const char *const *args)
+git_async (const Repo *repo, const char *what, const char *const *args)
 {
-	size_t n = 0;
+	size_t n = 0, ne = sizeof git_env / sizeof git_env[0] - 1;
 	while (args[n] != NULL)
 		n++;
-	const char **argv = xmalloc ((n + 6) * sizeof (char *));
-	argv[0] = "git";
-	argv[1] = "-C";
-	argv[2] = root;
-	argv[3] = "--no-pager";
-	memcpy (argv + 4, args, (n + 1) * sizeof (char *));
+	const char **git = xmalloc ((n + ne + 5) * sizeof (char *));
+	size_t k = 0;
+	if (repo->remote != NULL) {
+		git[k++] = "env";
+		for (size_t i = 0; i < ne; i++)
+			git[k++] = git_env[i];
+		git[k++] = "git";
+	} else {
+		git[k++] = "git";
+		git[k++] = "-C";
+		git[k++] = repo->root;
+	}
+	git[k++] = "--no-pager";
+	memcpy (git + k, args, (n + 1) * sizeof (char *));
 
 	StrBuf sb;
 	sb_init (&sb);
@@ -2342,17 +2582,26 @@ git_async (const char *root, const char *what, const char *const *args)
 	for (size_t i = 0; i < n; i++)
 		sb_addf (&sb, " %s", args[i]);
 	sb_addc (&sb, '\n');
-	append_text (process_buffer (root), sb.s, sb.len);
+	append_text (process_buffer (repo), sb.s, sb.len);
 	sb_free (&sb);
 
+	/* On another machine, ssh runs git there as a process of its own,
+	   as for a terminal: remote-timeout does not bound it. */
+	StrVec keep = { NULL, 0, 0 };
+	const char **argv = repo->remote != NULL ? remote_command_argv (repo->remote, repo->root, git, &keep) : git;
 	AsyncGit *a = xzalloc (sizeof (AsyncGit));
-	a->root = xstrdup (root);
+	a->repo = repo_copy (repo);
 	a->what = xstrdup (what);
-	Process *p = process_start (argv, NULL, root, false, 0, 0, git_env, async_output, async_exit, a);
-	free (argv);
+	Process *p = repo->remote != NULL
+		? process_start (argv, NULL, NULL, false, 0, 0, NULL, async_output, async_exit, a)
+		: process_start (argv, NULL, repo->root, false, 0, 0, git_env, async_output, async_exit, a);
+	if (argv != git)
+		free (argv);
+	free (git);
+	sv_clear (&keep);
 	if (p == NULL) {
-		minibuf_error ("Cannot run git");
-		free (a->root);
+		minibuf_error (repo->remote != NULL ? "Cannot run ssh" : "Cannot run git");
+		repo_clear (&a->repo);
 		free (a->what);
 		free (a);
 		return false;
@@ -2364,37 +2613,38 @@ git_async (const char *root, const char *what, const char *const *args)
 
 /* Committing. */
 
-static bool
-has_staged_changes (const char *root)
-{
-	StrBuf out;
-	sb_init (&out);
-	int status = git_args (root, (const char *[]) { "diff", "--cached", "--quiet", NULL }, NULL, 0, &out, NULL);
-	sb_free (&out);
-	return status == 1;
-}
-
 static void
 init_commit_map (void);
 
 static bool
-start_commit (const char *root, bool amend, bool reword)
+start_commit (const Repo *repo, bool amend, bool reword)
 {
 	bool all = false;
-	if (!amend && !has_staged_changes (root)) {
-		int ans = minibuf_read_y_or_n ("Nothing staged.  Commit all uncommitted changes? ");
-		if (ans != 1) {
-			if (ans == 0)
-				minibuf_error ("Nothing staged");
+	if (!amend) {
+		/* Exit status 1 if something is staged. */
+		int staged = git_args (repo, (const char *[]) { "diff", "--cached", "--quiet", NULL }, NULL, 0, NULL, NULL);
+		if (remote_failed (repo, staged))
 			return false;
+		if (staged != 1) {
+			int ans = minibuf_read_y_or_n ("Nothing staged.  Commit all uncommitted changes? ");
+			if (ans != 1) {
+				if (ans == 0)
+					minibuf_error ("Nothing staged");
+				return false;
+			}
+			all = true;
 		}
-		all = true;
 	}
 
+	int status = 0;
 	char *message = amend
-		? git_query (root, (const char *[]) { "log", "-1", "--format=%B", NULL })
+		? git_query_status (repo, (const char *[]) { "log", "-1", "--format=%B", NULL }, &status)
 		: NULL;
-	char *branch = current_branch (root);
+	char *branch = NULL;
+	if (remote_failed (repo, status) || !current_branch (repo, &branch)) {
+		free (message);
+		return false;
+	}
 	StrBuf text;
 	sb_init (&text);
 	sb_add (&text, message != NULL ? message : "");
@@ -2406,17 +2656,18 @@ start_commit (const char *root, bool amend, bool reword)
 	free (branch);
 
 	init_commit_map ();
+	char *name = buffer_unique_name ("COMMIT_EDITMSG");
 	Buffer *bp = buffer_new (NULL);
-	bp->name = buffer_unique_name ("COMMIT_EDITMSG");
-	free (bp->dir);
-	bp->dir = xstrdup (root);
+	bp->name = name;
 	bp->nosave = true;
 	bp->keymap = commit_map;
 	buffer_set_highlighter (bp, &commit_mode);
 	bp->mode_label = xstrdup ("Git-Commit");
 	bp->magit = xzalloc (sizeof (Magit));
 	bp->magit->kind = MAGIT_COMMIT_MESSAGE;
-	bp->magit->root = xstrdup (root);
+	/* Not a remote buffer, even for a remote repository: it has no
+	   file there to be saved to. */
+	set_repo (bp, repo, false);
 	bp->magit->amend = amend;
 	bp->magit->reword = reword;
 	bp->magit->all = all;
@@ -2426,8 +2677,12 @@ start_commit (const char *root, bool amend, bool reword)
 
 	/* Show what will be committed in the other window. */
 	char *diff_args = xstrdup (all ? "HEAD" : amend ? "--cached HEAD^" : "--cached");
-	show_magit_buffer ("magit-diff", root, MAGIT_DIFF, diff_args);
+	bool shown = show_magit_buffer ("magit-diff", repo, MAGIT_DIFF, diff_args);
 	free (diff_args);
+	if (!shown) {
+		buffer_kill (bp);
+		return false;
+	}
 	Buffer *diff_bp = cur_bp;
 	buffer_switch_to (bp, true);
 	buffer_goto_offset (bp, 0);
@@ -2465,10 +2720,10 @@ F_git_commit_commit (long uniarg, Args *args)
 		argv[k++] = "--all";
 	argv[k] = NULL;
 
-	char *root = xstrdup (m->root);
+	Repo repo = repo_copy (&m->repo);
 	StrBuf out;
 	sb_init (&out);
-	bool ok = git_run_input (root, argv, msg.s, msg.len, &out);
+	bool ok = git_run_input (&repo, argv, msg.s, msg.len, &out);
 	sb_free (&msg);
 	if (ok) {
 		Buffer *bp = cur_bp;
@@ -2476,16 +2731,16 @@ F_git_commit_commit (long uniarg, Args *args)
 		/* Return to the status buffer. */
 		Buffer *status = NULL;
 		for (Buffer *b = head_bp; b != NULL; b = b->next)
-			if (b->magit != NULL && b->magit->kind == MAGIT_STATUS && strcmp (b->magit->root, root) == 0)
+			if (b->magit != NULL && b->magit->kind == MAGIT_STATUS && repo_eq (&b->magit->repo, &repo))
 				status = b;
 		if (status != NULL)
 			buffer_switch_to (status, true);
 		buffer_kill (bp);
-		refresh_status_of (root);
+		refresh_status_of (&repo);
 		minibuf_write ("%.*s", (int) n, out.s);
 	}
 	sb_free (&out);
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2498,14 +2753,14 @@ F_git_commit_abort (long uniarg, Args *args)
 	if (m == NULL || m->kind != MAGIT_COMMIT_MESSAGE)
 		return false;
 	Buffer *bp = cur_bp;
-	char *root = xstrdup (m->root);
+	Repo repo = repo_copy (&m->repo);
 	for (Buffer *b = head_bp; b != NULL; b = b->next)
-		if (b->magit != NULL && b->magit->kind == MAGIT_STATUS && strcmp (b->magit->root, root) == 0) {
+		if (b->magit != NULL && b->magit->kind == MAGIT_STATUS && repo_eq (&b->magit->repo, &repo)) {
 			buffer_switch_to (b, true);
 			break;
 		}
 	buffer_kill (bp);
-	free (root);
+	repo_clear (&repo);
 	minibuf_write ("Commit aborted");
 	return true;
 }
@@ -2518,26 +2773,26 @@ F_magit_commit (long uniarg, Args *args)
 	static const Action actions[] = {
 		{ 'c', "Commit" }, { 'a', "Amend" }, { 'e', "Extend" }, { 'w', "Reword" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	switch (transient ("Create", ACTIONS (actions))) {
 	case 'c':
-		ok = start_commit (root, false, false);
+		ok = start_commit (&repo, false, false);
 		break;
 	case 'a':
-		ok = start_commit (root, true, false);
+		ok = start_commit (&repo, true, false);
 		break;
 	case 'w':
-		ok = start_commit (root, true, true);
+		ok = start_commit (&repo, true, true);
 		break;
 	case 'e':
-		ok = git_run (root, (const char *[]) { "commit", "--amend", "--no-edit", NULL });
-		refresh_status_of (root);
+		ok = git_run (&repo, (const char *[]) { "commit", "--amend", "--no-edit", NULL });
+		refresh_status_of (&repo);
 		break;
 	}
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2550,32 +2805,37 @@ remote_command (const char *verb, const char *what)
 	static const Action actions[] = {
 		{ 'p', "upstream (default)" }, { 'u', "upstream, setting it" }, { 'e', "elsewhere" }, { 'a', "all remotes" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	char *title = xasprintf ("%s", what);
 	char key = transient (title, actions, strcmp (verb, "fetch") == 0 ? 4 : 3);
 	free (title);
 	bool ok = false;
-	char *branch = current_branch (root);
+	char *branch;
+	if (!current_branch (&repo, &branch))
+		key = 0;
 	switch (key) {
 	case 'p':
 		if (strcmp (verb, "push") == 0) {
-			char *upstream = git_query (root, (const char *[]) {
-					"rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", NULL });
+			int status;
+			char *upstream = git_query_status (&repo, (const char *[]) {
+					"rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", NULL }, &status);
+			if (remote_failed (&repo, status))
+				break;
 			ok = upstream != NULL
-				? git_async (root, verb, (const char *[]) { "push", "-v", NULL })
-				: git_async (root, verb, (const char *[]) { "push", "-v", "-u", "origin", "HEAD", NULL });
+				? git_async (&repo, verb, (const char *[]) { "push", "-v", NULL })
+				: git_async (&repo, verb, (const char *[]) { "push", "-v", "-u", "origin", "HEAD", NULL });
 			free (upstream);
 		} else
-			ok = git_async (root, verb, (const char *[]) { verb, "-v", NULL });
+			ok = git_async (&repo, verb, (const char *[]) { verb, "-v", NULL });
 		break;
 	case 'u': {
 		char *remote = read_string ("Remote: ", "origin");
 		if (remote != NULL)
 			ok = strcmp (verb, "push") == 0
-				? git_async (root, verb, (const char *[]) { "push", "-v", "-u", remote, "HEAD", NULL })
-				: git_async (root, verb, (const char *[]) { verb, "-v", remote, branch != NULL ? branch : "HEAD", NULL });
+				? git_async (&repo, verb, (const char *[]) { "push", "-v", "-u", remote, "HEAD", NULL })
+				: git_async (&repo, verb, (const char *[]) { verb, "-v", remote, branch != NULL ? branch : "HEAD", NULL });
 		free (remote);
 		break;
 	}
@@ -2584,17 +2844,17 @@ remote_command (const char *verb, const char *what)
 		if (where != NULL) {
 			char *remote = strtok (where, " "), *ref = strtok (NULL, " ");
 			if (remote != NULL)
-				ok = git_async (root, verb, (const char *[]) { verb, "-v", remote, ref, NULL });
+				ok = git_async (&repo, verb, (const char *[]) { verb, "-v", remote, ref, NULL });
 		}
 		free (where);
 		break;
 	}
 	case 'a':
-		ok = git_async (root, verb, (const char *[]) { "fetch", "-v", "--all", NULL });
+		ok = git_async (&repo, verb, (const char *[]) { "fetch", "-v", "--all", NULL });
 		break;
 	}
 	free (branch);
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2634,45 +2894,49 @@ F_magit_branch (long uniarg, Args *args)
 		{ 'b', "Checkout" }, { 'c', "Create and checkout" }, { 'n', "Create" },
 		{ 'm', "Rename" }, { 'k', "Delete" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
-	char *name = NULL, *start = NULL, *branch = current_branch (root);
+	char *name = NULL, *start = NULL, *branch;
+	if (!current_branch (&repo, &branch)) {
+		repo_clear (&repo);
+		return false;
+	}
 	char key = transient ("Branch", ACTIONS (actions));
 	switch (key) {
 	case 'b':
-		if ((name = read_ref (root, "Checkout", ref_at_point (), true)) != NULL)
-			ok = git_run (root, (const char *[]) { "checkout", name, NULL });
+		if ((name = read_ref (&repo, "Checkout", ref_at_point (), true)) != NULL)
+			ok = git_run (&repo, (const char *[]) { "checkout", name, NULL });
 		break;
 	case 'c':
 	case 'n': {
 		bool checkout = key == 'c';
 		if ((name = read_string ("Name for new branch: ", "")) != NULL && name[0] != '\0' &&
-		    (start = read_ref (root, "Start point", ref_at_point () != NULL ? ref_at_point () : "HEAD", true)) != NULL)
+		    (start = read_ref (&repo, "Start point", ref_at_point () != NULL ? ref_at_point () : "HEAD", true)) != NULL)
 			ok = checkout
-				? git_run (root, (const char *[]) { "checkout", "-b", name, start, NULL })
-				: git_run (root, (const char *[]) { "branch", name, start, NULL });
+				? git_run (&repo, (const char *[]) { "checkout", "-b", name, start, NULL })
+				: git_run (&repo, (const char *[]) { "branch", name, start, NULL });
 		break;
 	}
 	case 'm':
-		if ((start = read_ref (root, "Rename branch", branch, false)) != NULL &&
+		if ((start = read_ref (&repo, "Rename branch", branch, false)) != NULL &&
 		    (name = read_string ("Rename to: ", "")) != NULL && name[0] != '\0')
-			ok = git_run (root, (const char *[]) { "branch", "-m", start, name, NULL });
+			ok = git_run (&repo, (const char *[]) { "branch", "-m", start, name, NULL });
 		break;
 	case 'k':
-		if ((name = read_ref (root, "Delete branch", NULL, false)) != NULL) {
-			ok = git_run (root, (const char *[]) { "branch", "-d", name, NULL });
+		if ((name = read_ref (&repo, "Delete branch", NULL, false)) != NULL) {
+			ok = git_run (&repo, (const char *[]) { "branch", "-d", name, NULL });
 			if (!ok && minibuf_read_y_or_n ("Branch %s is not fully merged; delete it anyway? ", name) == 1)
-				ok = git_run (root, (const char *[]) { "branch", "-D", name, NULL });
+				ok = git_run (&repo, (const char *[]) { "branch", "-D", name, NULL });
 		}
 		break;
 	}
 	free (name);
 	free (start);
 	free (branch);
-	refresh_after_change (root);
-	free (root);
+	refresh_after_change (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2684,22 +2948,22 @@ F_magit_merge (long uniarg, Args *args)
 	static const Action actions[] = {
 		{ 'm', "Merge" }, { 'n', "Merge, don't commit" }, { 's', "Squash merge" }, { 'a', "Abort" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char key = transient ("Merge", ACTIONS (actions));
 	char *name = NULL;
 	if (key == 'a') {
 		if (minibuf_read_y_or_n ("Abort merge? ") == 1)
-			ok = git_run (root, (const char *[]) { "merge", "--abort", NULL });
-	} else if (key != 0 && (name = read_ref (root, "Merge", ref_at_point (), true)) != NULL) {
+			ok = git_run (&repo, (const char *[]) { "merge", "--abort", NULL });
+	} else if (key != 0 && (name = read_ref (&repo, "Merge", ref_at_point (), true)) != NULL) {
 		const char *opt = key == 'm' ? "--no-edit" : key == 'n' ? "--no-commit" : "--squash";
-		ok = git_run (root, (const char *[]) { "merge", opt, name, NULL });
+		ok = git_run (&repo, (const char *[]) { "merge", opt, name, NULL });
 	}
 	free (name);
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2712,52 +2976,52 @@ F_magit_rebase (long uniarg, Args *args)
 		{ 'u', "onto upstream" }, { 'e', "onto elsewhere" }, { 'c', "Continue" },
 		{ 's', "Skip" }, { 'a', "Abort" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char *name = NULL;
 	switch (transient ("Rebase", ACTIONS (actions))) {
 	case 'u':
-		ok = git_run (root, (const char *[]) { "rebase", "@{upstream}", NULL });
+		ok = git_run (&repo, (const char *[]) { "rebase", "@{upstream}", NULL });
 		break;
 	case 'e':
-		if ((name = read_ref (root, "Rebase onto", ref_at_point (), true)) != NULL)
-			ok = git_run (root, (const char *[]) { "rebase", name, NULL });
+		if ((name = read_ref (&repo, "Rebase onto", ref_at_point (), true)) != NULL)
+			ok = git_run (&repo, (const char *[]) { "rebase", name, NULL });
 		break;
 	case 'c':
-		ok = git_run (root, (const char *[]) { "-c", "core.editor=true", "rebase", "--continue", NULL });
+		ok = git_run (&repo, (const char *[]) { "-c", "core.editor=true", "rebase", "--continue", NULL });
 		break;
 	case 's':
-		ok = git_run (root, (const char *[]) { "rebase", "--skip", NULL });
+		ok = git_run (&repo, (const char *[]) { "rebase", "--skip", NULL });
 		break;
 	case 'a':
 		if (minibuf_read_y_or_n ("Abort this rebase? ") == 1)
-			ok = git_run (root, (const char *[]) { "rebase", "--abort", NULL });
+			ok = git_run (&repo, (const char *[]) { "rebase", "--abort", NULL });
 		break;
 	}
 	free (name);
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
 static bool
 reset_to (const char *mode)
 {
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char *prompt = xasprintf ("Reset %s to", mode + 2);
-	char *rev = read_ref (root, prompt, ref_at_point () != NULL ? ref_at_point () : "HEAD", true);
+	char *rev = read_ref (&repo, prompt, ref_at_point () != NULL ? ref_at_point () : "HEAD", true);
 	free (prompt);
 	if (rev != NULL && (strcmp (mode, "--hard") != 0 ||
 			    minibuf_read_y_or_n ("Hard reset to %s, discarding all changes? ", rev) == 1))
-		ok = git_run (root, (const char *[]) { "reset", mode, rev, NULL });
+		ok = git_run (&repo, (const char *[]) { "reset", mode, rev, NULL });
 	free (rev);
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2794,26 +3058,26 @@ F_magit_tag (long uniarg, Args *args)
 	(void) uniarg;
 	(void) args;
 	static const Action actions[] = { { 't', "Create" }, { 'k', "Delete" } };
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char *name = NULL, *rev = NULL;
 	switch (transient ("Tag", ACTIONS (actions))) {
 	case 't':
 		if ((name = read_string ("Tag name: ", "")) != NULL && name[0] != '\0' &&
-		    (rev = read_ref (root, "Place tag on", ref_at_point () != NULL ? ref_at_point () : "HEAD", true)) != NULL)
-			ok = git_run (root, (const char *[]) { "tag", name, rev, NULL });
+		    (rev = read_ref (&repo, "Place tag on", ref_at_point () != NULL ? ref_at_point () : "HEAD", true)) != NULL)
+			ok = git_run (&repo, (const char *[]) { "tag", name, rev, NULL });
 		break;
 	case 'k':
 		if ((name = read_string ("Delete tag: ", "")) != NULL && name[0] != '\0')
-			ok = git_run (root, (const char *[]) { "tag", "-d", name, NULL });
+			ok = git_run (&repo, (const char *[]) { "tag", "-d", name, NULL });
 		break;
 	}
 	free (name);
 	free (rev);
-	refresh_after_change (root);
-	free (root);
+	refresh_after_change (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2825,8 +3089,8 @@ F_magit_stash (long uniarg, Args *args)
 	static const Action actions[] = {
 		{ 'z', "Stash" }, { 'i', "Stash index" }, { 'p', "Pop" }, { 'a', "Apply" }, { 'k', "Drop" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	const char *at = ref_at_point ();
 	char *stash = xstrdup (at != NULL && str_has_prefix (at, "stash@") ? at : "stash@{0}");
@@ -2847,25 +3111,25 @@ F_magit_stash (long uniarg, Args *args)
 				argv[k++] = msg;
 			}
 			argv[k] = NULL;
-			ok = git_run (root, argv);
+			ok = git_run (&repo, argv);
 		}
 		break;
 	case 'p':
-		ok = git_run (root, (const char *[]) { "stash", "pop", "--index", stash, NULL }) ||
-			git_run (root, (const char *[]) { "stash", "pop", stash, NULL });
+		ok = git_run (&repo, (const char *[]) { "stash", "pop", "--index", stash, NULL }) ||
+			git_run (&repo, (const char *[]) { "stash", "pop", stash, NULL });
 		break;
 	case 'a':
-		ok = git_run (root, (const char *[]) { "stash", "apply", stash, NULL });
+		ok = git_run (&repo, (const char *[]) { "stash", "apply", stash, NULL });
 		break;
 	case 'k':
 		if (minibuf_read_y_or_n ("Drop %s? ", stash) == 1)
-			ok = git_run (root, (const char *[]) { "stash", "drop", stash, NULL });
+			ok = git_run (&repo, (const char *[]) { "stash", "drop", stash, NULL });
 		break;
 	}
 	free (msg);
 	free (stash);
-	refresh_status_of (root);
-	free (root);
+	refresh_status_of (&repo);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2880,33 +3144,37 @@ F_magit_log (long uniarg, Args *args)
 	static const Action actions[] = {
 		{ 'l', "current branch" }, { 'a', "all references" }, { 'o', "other" }, { 'f', "file at point" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char *other = NULL;
 	switch (transient ("Log", ACTIONS (actions))) {
 	case 'l':
-		ok = show_magit_buffer ("magit-log", root, MAGIT_LOG, NULL);
+		ok = show_magit_buffer ("magit-log", &repo, MAGIT_LOG, NULL);
 		break;
 	case 'a':
-		ok = show_magit_buffer ("magit-log", root, MAGIT_LOG, "--all");
+		ok = show_magit_buffer ("magit-log", &repo, MAGIT_LOG, "--all");
 		break;
 	case 'o':
-		if ((other = read_ref (root, "Log rev,s", ref_at_point (), true)) != NULL)
-			ok = show_magit_buffer ("magit-log", root, MAGIT_LOG, other);
+		if ((other = read_ref (&repo, "Log rev,s", ref_at_point (), true)) != NULL)
+			ok = show_magit_buffer ("magit-log", &repo, MAGIT_LOG, other);
 		break;
 	case 'f': {
 		const LineInfo *li = cur_bp->magit != NULL ? current_line () : NULL;
 		FileDiff *f = li != NULL ? line_file (cur_bp->magit, li) : NULL;
 		char *file = f != NULL ? xstrdup (f->path) : NULL;
-		if (file == NULL && cur_bp->filename != NULL && str_has_prefix (cur_bp->filename, root))
-			file = xstrdup (cur_bp->filename + strlen (root) + 1);
+		const char *visited = repo.remote != NULL
+			? (cur_bp->remote == repo.remote ? cur_bp->remote_path : NULL)
+			: (cur_bp->remote == NULL ? cur_bp->filename : NULL);
+		size_t rlen = strlen (repo.root);
+		if (file == NULL && visited != NULL && str_has_prefix (visited, repo.root) && visited[rlen] == '/')
+			file = xstrdup (visited + rlen + 1);
 		if (file == NULL)
 			minibuf_error ("No file here");
 		else {
 			char *log_args = xstrcat3 ("--follow -- ", file, "");
-			ok = show_magit_buffer ("magit-log", root, MAGIT_LOG, log_args);
+			ok = show_magit_buffer ("magit-log", &repo, MAGIT_LOG, log_args);
 			free (log_args);
 		}
 		free (file);
@@ -2914,7 +3182,7 @@ F_magit_log (long uniarg, Args *args)
 	}
 	}
 	free (other);
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2927,8 +3195,8 @@ F_magit_diff (long uniarg, Args *args)
 		{ 'd', "Dwim" }, { 'u', "unstaged" }, { 's', "staged" }, { 'w', "worktree" }, { 'r', "range" },
 		{ 'c', "commit at point" },
 	};
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	bool ok = false;
 	char *range = NULL;
@@ -2936,37 +3204,37 @@ F_magit_diff (long uniarg, Args *args)
 	case 'd': {
 		const LineInfo *li = cur_bp->magit != NULL ? current_line () : NULL;
 		if (li != NULL && li->sec == SEC_STAGED)
-			ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, "--cached");
+			ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, "--cached");
 		else if (li != NULL && li->ref != NULL)
-			ok = show_revision (root, li->ref);
+			ok = show_revision (&repo, li->ref);
 		else
-			ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, NULL);
+			ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, NULL);
 		break;
 	}
 	case 'u':
-		ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, NULL);
+		ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, NULL);
 		break;
 	case 's':
-		ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, "--cached");
+		ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, "--cached");
 		break;
 	case 'w':
-		ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, "HEAD");
+		ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, "HEAD");
 		break;
 	case 'r':
-		if ((range = read_ref (root, "Diff for range", ref_at_point (), true)) != NULL)
-			ok = show_magit_buffer ("magit-diff", root, MAGIT_DIFF, range);
+		if ((range = read_ref (&repo, "Diff for range", ref_at_point (), true)) != NULL)
+			ok = show_magit_buffer ("magit-diff", &repo, MAGIT_DIFF, range);
 		break;
 	case 'c':
 		if (ref_at_point () != NULL) {
 			char *ref = xstrdup (ref_at_point ());
-			ok = show_revision (root, ref);
+			ok = show_revision (&repo, ref);
 			free (ref);
 		} else
 			minibuf_error ("No commit at point");
 		break;
 	}
 	free (range);
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -2975,11 +3243,11 @@ F_magit_process_buffer (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
-	Buffer *bp = process_buffer (root);
-	free (root);
+	Buffer *bp = process_buffer (&repo);
+	repo_clear (&repo);
 	buffer_switch_to (bp, true);
 	buffer_goto_offset (bp, buffer_length (bp));
 	return true;
@@ -2989,8 +3257,8 @@ static bool
 F_magit_git_command (long uniarg, Args *args)
 {
 	(void) uniarg;
-	char *root = current_root ();
-	if (root == NULL)
+	Repo repo;
+	if (!current_repo (&repo))
 		return false;
 	char *cmd = xstrdup_or_null (args_poll (args));
 	if (cmd == NULL)
@@ -3016,7 +3284,7 @@ F_magit_git_command (long uniarg, Args *args)
 		argv[k] = NULL;
 		StrBuf out;
 		sb_init (&out);
-		ok = git_run_input (root, argv, NULL, 0, &out);
+		ok = git_run_input (&repo, argv, NULL, 0, &out);
 		if (ok) {
 			size_t n = out.len;
 			while (n > 0 && out.s[n - 1] == '\n')
@@ -3027,10 +3295,10 @@ F_magit_git_command (long uniarg, Args *args)
 				minibuf_write ("%.*s", (int) n, out.s);
 		}
 		sb_free (&out);
-		refresh_status_of (root);
+		refresh_status_of (&repo);
 	}
 	free (cmd);
-	free (root);
+	repo_clear (&repo);
 	return ok;
 }
 
@@ -3168,7 +3436,11 @@ magit_init (void)
 		       "b, l, d, m, r, X, t and z show popups for committing, pushing, pulling,\n"
 		       "fetching, branches, logs, diffs, merging, rebasing, resetting, tags\n"
 		       "and stashes. 4 shows every diff, g refreshes, $ shows the git commands\n"
-		       "run, and ? lists the commands.");
+		       "run, and ? lists the commands.\n"
+		       "\n"
+		       "In a remote buffer, the repository is on its machine, and git runs\n"
+		       "there. The optional argument DIR names a directory in the repository,\n"
+		       "on the current buffer's machine, relative to the buffer's directory.");
 	lisp_func_new ("magit-refresh", F_magit_refresh, true, "Refresh the current Magit buffer.");
 	lisp_func_new ("magit-section-toggle", F_magit_section_toggle, true,
 		       "Show or hide the section at point.");

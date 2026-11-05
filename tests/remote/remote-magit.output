@@ -1,0 +1,43 @@
+Head:     main 3cbf12f init
+
+Unstaged changes (2)
+modified   a.txt
+@@ -7,4 +7,4 @@ ONE
+ 7
+ 8
+ 9
+-10
++TEN
+modified   c.txt
+
+Staged changes (2)
+modified   a.txt
+new file   b it's "$(x)".txt
+
+Recent commits
+3cbf12f init
+
+c
+C
+staged here, not through ssh
+Here is a sample file.
+It has several lines.
+
+And more than one paragraph.
+magit-process: it's a "repo" $(x)<2> | Magit Process
+magit: it's a "repo" $(x)<2> | Magit
+magit: it's a "repo" $(x) | Magit | ssh:xztest:~/it's a "repo" $(x)
+c.txt | Fundamental | ssh:xztest:~/it's a "repo" $(x)/c.txt
+magit-diff: it's a "repo" $(x) | Magit Diff | ssh:xztest:~/it's a "repo" $(x)
+magit-process: it's a "repo" $(x) | Magit Process | ssh:xztest:~/it's a "repo" $(x)
+Remote: remote change
+Local: init
+ a.txt                 | 2 +-
+ "b it's \"$(x)\".txt" | 0
+ 2 files changed, 1 insertion(+), 1 deletion(-)
+-1
++ONE
+ M a.txt
+M  c.txt
+pushed: remote change
+pushed: init

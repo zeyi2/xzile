@@ -4,5 +4,5 @@ terminal on xztest in
 *shell ssh:xztest*: ignored OSC 7 for host elsewhere.invalid
 /home/t/sub
 refused compile in *shell ssh:xztest*
-refused magit-status in *shell ssh:xztest*
+git rev-parse on xztest: exit status 128
 Listing

@@ -187,9 +187,33 @@ files, and Dired for browsing (`RET`, `o`, `v`, `^`, `g`, marks).
 Saving writes only if the file is unchanged since it was read or
 saved, otherwise it asks; the buffer stays modified unless the remote
 side confirms what it wrote. Dired's `R` `C` `D` `x` `M` `+`, and
-compile, Magit, `cd`, `write-file` and previews are refused in
-remote buffers rather than run locally, and a remote failure never
-falls back to a local file or program.
+compile, `cd`, `write-file` and previews are refused in remote
+buffers rather than run locally, and a remote failure never falls
+back to a local file or program.
+
+Magit works on a repository on a remote machine: `C-x g`
+(`magit-status`) in a remote buffer (a file, a Dired listing or a
+terminal there) finds the repository containing its directory on that
+machine, and every git command for it, including staging hunks and
+committing (the patch or message goes to git's standard input), runs
+there, in the repository, through the shared connection. A repository
+is known by its machine and its top directory, so the same path here
+and on another machine (or on two machines) gives separate status,
+log, diff and `$` process buffers, shown as `ssh:host:dir` in the
+buffer list; a change in one refreshes only that repository's
+buffers. `RET` visits files and directories there as remote buffers,
+and commit messages are edited in a local buffer that commits to that
+repository. Called from Lisp with a directory, `(magit-status DIR)`
+looks for the repository on the current buffer's machine: a relative
+DIR is relative to the buffer's directory there, and `~` is that
+machine's home. A refresh runs its git commands there one after the
+other, not in parallel, as each waits for ssh; `C-g` cancels a
+command and `remote-timeout` bounds it, as for shell commands, and a
+refresh that does not finish leaves the buffer as it was. Push, pull
+and fetch run there in the background, without `remote-timeout`. The
+remote machine needs `git` (and `env`) in the `PATH` of
+non-interactive ssh sessions. Visited remote files are not reverted
+when git changes them; revert them with `M-x revert-buffer`.
 
 Shells and shell commands started from a remote buffer (a file, a
 Dired listing or a terminal there) run on its machine, in its
