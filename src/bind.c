@@ -168,8 +168,10 @@ lookup_keys (const KeyVec *keys, LispFunc **f)
 	enum Lookup local = lookup_in (local_map, keys, f);
 	if (local != LOOKUP_UNDEFINED)
 		return local;
-	/* A local default takes every single key it does not bind. */
-	if (local_map != NULL && local_map->default_func != NULL && keys->n == 1) {
+	/* A local default takes every single key it does not bind, except
+	   mouse events. */
+	if (local_map != NULL && local_map->default_func != NULL && keys->n == 1 &&
+	    !KBD_IS_MOUSE (keys->v[0])) {
 		*f = local_map->default_func;
 		return LOOKUP_FUNCTION;
 	}
@@ -387,7 +389,18 @@ get_and_run_command (void)
 		return;
 	}
 
+	/* Mouse events for a terminal program go straight to it; others
+	   that have no command, such as releases, are ignored. */
+	if (keys.n == 1 && KBD_IS_MOUSE (keys.v[0]) && shell_mouse (keys.v[0])) {
+		kv_free (&keys);
+		return;
+	}
+
 	LispFunc *f = get_function_by_keys (&keys);
+	if (f == NULL && keys.n == 1 && KBD_IS_MOUSE (keys.v[0])) {
+		kv_free (&keys);
+		return;
+	}
 
 	minibuf_clear ();
 	if (f != NULL) {

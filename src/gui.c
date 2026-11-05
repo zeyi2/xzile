@@ -1102,6 +1102,7 @@ static size_t stack_n, stack_cap;
 static char *pending_paste_text;
 static size_t mouse_y, mouse_x;
 static bool mouse_down;
+static int shell_button;	/* The button (1-3) pressed in a program reading the mouse. */
 static float wheel_acc;
 static bool suppress_text;	/* The last event was a key down that was handled. */
 static bool composing;		/* An input method has uncommitted text. */
@@ -1445,11 +1446,28 @@ handle_event (const SDL_Event *ev)
 				SDL_CaptureMouse (SDL_TRUE);
 			} else
 				mouse_down = true;
+			shell_button = shell_mouse_at (y, x) ? 1 : 0;
 			queue_push (KBD_MOUSE_1);
-		} else if (ev->button.button == SDL_BUTTON_MIDDLE)
-			paste_clipboard ();
+		} else if (ev->button.button == SDL_BUTTON_MIDDLE || ev->button.button == SDL_BUTTON_RIGHT) {
+			size_t y, x;
+			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
+			bool middle = ev->button.button == SDL_BUTTON_MIDDLE;
+			if (shell_button == 0 && shell_mouse_at (y, x)) {
+				mouse_y = y;
+				mouse_x = x;
+				shell_button = middle ? 2 : 3;
+				queue_push (middle ? KBD_MOUSE_2 : KBD_MOUSE_3);
+			} else if (middle)
+				paste_clipboard ();
+		}
 		break;
-	case SDL_MOUSEBUTTONUP:
+	case SDL_MOUSEBUTTONUP: {
+		static const int buttons[] = { 0, SDL_BUTTON_LEFT, SDL_BUTTON_MIDDLE, SDL_BUTTON_RIGHT };
+		if (shell_button != 0 && ev->button.button == buttons[shell_button]) {
+			pixel_to_cell (ev->button.x, ev->button.y, &mouse_y, &mouse_x);
+			queue_push (KBD_UP_MOUSE_1 + (Keystroke) shell_button - 1);
+			shell_button = 0;
+		}
 		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
 			mouse_down = false;
@@ -1462,6 +1480,7 @@ handle_event (const SDL_Event *ev)
 			show_cursor (pointer_at (y, x));
 		}
 		break;
+	}
 	case SDL_MOUSEMOTION: {
 		size_t y, x;
 		pixel_to_cell (ev->motion.x, ev->motion.y, &y, &x);
@@ -1488,14 +1507,21 @@ handle_event (const SDL_Event *ev)
 		}
 		if (!mouse_down)
 			show_cursor (pointer_at (y, x));
-		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK)) {
+		Keystroke drag = KBD_NOKEY;
+		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK))
+			drag = KBD_DRAG_MOUSE_1;
+		else if (shell_button == 2 && (ev->motion.state & SDL_BUTTON_MMASK))
+			drag = KBD_DRAG_MOUSE_2;
+		else if (shell_button == 3 && (ev->motion.state & SDL_BUTTON_RMASK))
+			drag = KBD_DRAG_MOUSE_3;
+		if (drag != KBD_NOKEY) {
 			if (y == mouse_y && x == mouse_x)
 				break;
 			mouse_y = y;
 			mouse_x = x;
 			/* One pending drag is enough: it reads the latest position. */
-			if (queue_n == 0 || queue[(queue_head + queue_n - 1) % queue_cap] != KBD_DRAG_MOUSE_1)
-				queue_push (KBD_DRAG_MOUSE_1);
+			if (queue_n == 0 || queue[(queue_head + queue_n - 1) % queue_cap] != drag)
+				queue_push (drag);
 		}
 		break;
 	}

@@ -254,12 +254,22 @@ typedef unsigned Keystroke;
 #define KBD_F12 00433u
 #define KBD_BRACKETED_PASTE 00434u
 #define KBD_ESCAPE 00435u	/* A bare ESC, in terminal buffers. */
-/* Mouse events, which only the GUI produces; term_mouse_position
-   gives the cell they happened at. */
+/* Mouse events; term_mouse_position gives the cell they happened at.
+   Frontends send releases, drags of buttons 2 and 3, and presses of
+   buttons 2 and 3 only for terminal programs that read the mouse (see
+   shell_mouse_at). */
 #define KBD_MOUSE_1 00436u
 #define KBD_DRAG_MOUSE_1 00437u
 #define KBD_WHEEL_UP 00440u
 #define KBD_WHEEL_DOWN 00441u
+#define KBD_MOUSE_2 00442u
+#define KBD_MOUSE_3 00443u
+#define KBD_UP_MOUSE_1 00444u
+#define KBD_UP_MOUSE_2 00445u
+#define KBD_UP_MOUSE_3 00446u
+#define KBD_DRAG_MOUSE_2 00447u
+#define KBD_DRAG_MOUSE_3 00450u
+#define KBD_IS_MOUSE(k) ((k) >= KBD_MOUSE_1 && (k) <= KBD_DRAG_MOUSE_3)
 
 typedef struct {
 	Keystroke *v;
@@ -401,6 +411,13 @@ void vterm_cursor (const VTerm *t, int *y, int *x);
 bool vterm_cursor_visible (const VTerm *t);
 bool vterm_app_cursor (const VTerm *t);
 bool vterm_bracketed_paste (const VTerm *t);
+bool vterm_mouse_tracking (const VTerm *t);
+enum VMouseAction { VMOUSE_PRESS, VMOUSE_RELEASE, VMOUSE_DRAG };
+/* Report a mouse event at cell `y', `x' to the program, if it asked for
+   such reports: `button' is 0, 1 or 2 for the left, middle or right
+   button, or 64 or 65 for the wheel up or down. Returns false if the
+   program does not track such events. */
+bool vterm_mouse (VTerm *t, int button, enum VMouseAction action, int y, int x);
 size_t vterm_scrollback_len (const VTerm *t);
 const VCell *vterm_scrollback_line (const VTerm *t, size_t i, size_t *len);
 
@@ -812,6 +829,7 @@ Window *update_windows_geometry (size_t x, size_t y, size_t w, size_t h);
 bool resize_window_layout (Window *wp, int delta, bool vertical);
 unsigned long layout_generation (void);
 WinNode *layout_divider_at (size_t y, size_t x);
+WinNode *layout_leaf_at (size_t y, size_t x);
 bool layout_resize_split (WinNode *split, size_t size);
 
 /* redisplay.c */
@@ -1057,6 +1075,12 @@ bool shell_process_alive (const Buffer *bp);
 bool shell_draw (Window *wp, size_t topline, size_t leftcol);
 bool shell_cursor (Window *wp, size_t *y, size_t *x);
 void shell_send_paste (const char *text);
+/* Whether screen cell `y', `x' is in a terminal whose program reads
+   the mouse. */
+bool shell_mouse_at (size_t y, size_t x);
+/* Send mouse event `key' to the terminal program it is for, if that
+   program reads the mouse; returns false otherwise. */
+bool shell_mouse (Keystroke key);
 void shell_free (Buffer *bp);
 void terminal_init (void);
 

@@ -280,6 +280,30 @@ layout_divider_at (size_t y, size_t x)
 	return root_node != NULL ? winnode_divider_at (root_node, y, x) : NULL;
 }
 
+typedef struct {
+	size_t y, x;
+	WinNode *leaf;
+} LeafAt;
+
+static void
+find_leaf_at (WinNode *leaf, void *data)
+{
+	LeafAt *d = data;
+	if (d->y >= leaf->y && d->y < leaf->y + leaf->height &&
+	    d->x >= leaf->x && d->x < leaf->x + leaf->width)
+		d->leaf = leaf;
+}
+
+/* The window at row `y', column `x' of the screen, or NULL. */
+WinNode *
+layout_leaf_at (size_t y, size_t x)
+{
+	LeafAt d = { y, x, NULL };
+	if (root_node != NULL)
+		winnode_each_leaf (root_node, find_leaf_at, &d);
+	return d.leaf;
+}
+
 static bool
 split_fits (const WinNode *split, size_t size, size_t total)
 {

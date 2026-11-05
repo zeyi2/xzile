@@ -23,6 +23,7 @@
    In char mode, which is the default, the window shows the terminal
    and keys are sent to the program, except for C-x, which is a prefix
    for the usual C-x commands (C-x C-x sends C-x itself), and M-x.
+   Mouse events go to a program that has asked for them.
    In line mode (C-x C-j), the buffer holds the scrollback and screen
    as ordinary read-only text; C-x C-k or q returns to char mode. */
 
@@ -516,6 +517,80 @@ shell_send_paste (const char *text)
 	sb_free (&sb);
 }
 
+/* The mouse. */
+
+/* Whether the program in `wp' reads the mouse. */
+static bool
+tracks_mouse (const Window *wp)
+{
+	return shell_char_mode (wp->bp) && process_alive (wp->bp->shell->proc) &&
+		vterm_mouse_tracking (wp->bp->shell->vt);
+}
+
+/* The window whose text area has screen cell `*y', `*x', which become
+   relative to it; NULL if there is none. */
+static Window *
+text_window_at (size_t *y, size_t *x)
+{
+	WinNode *leaf = layout_leaf_at (*y, *x);
+	if (leaf == NULL || *y - leaf->y >= leaf->wp->eheight || *x - leaf->x >= leaf->wp->ewidth)
+		return NULL;
+	*y -= leaf->y;
+	*x -= leaf->x;
+	return leaf->wp;
+}
+
+bool
+shell_mouse_at (size_t y, size_t x)
+{
+	Window *wp = text_window_at (&y, &x);
+	return wp != NULL && tracks_mouse (wp) && !term_minibuf_active ();
+}
+
+/* A press or the wheel goes to the window under the pointer (a press
+   makes it current); a drag or release goes to the current window,
+   where the press was. */
+bool
+shell_mouse (Keystroke key)
+{
+	size_t y, x;
+	if (!term_mouse_position (&y, &x))
+		return false;
+
+	int button;
+	enum VMouseAction action;
+	switch (key) {
+	case KBD_MOUSE_1: button = 0; action = VMOUSE_PRESS; break;
+	case KBD_MOUSE_2: button = 1; action = VMOUSE_PRESS; break;
+	case KBD_MOUSE_3: button = 2; action = VMOUSE_PRESS; break;
+	case KBD_WHEEL_UP: button = 64; action = VMOUSE_PRESS; break;
+	case KBD_WHEEL_DOWN: button = 65; action = VMOUSE_PRESS; break;
+	case KBD_UP_MOUSE_1: button = 0; action = VMOUSE_RELEASE; break;
+	case KBD_UP_MOUSE_2: button = 1; action = VMOUSE_RELEASE; break;
+	case KBD_UP_MOUSE_3: button = 2; action = VMOUSE_RELEASE; break;
+	case KBD_DRAG_MOUSE_1: button = 0; action = VMOUSE_DRAG; break;
+	case KBD_DRAG_MOUSE_2: button = 1; action = VMOUSE_DRAG; break;
+	case KBD_DRAG_MOUSE_3: button = 2; action = VMOUSE_DRAG; break;
+	default: return false;
+	}
+
+	Window *wp;
+	if (action == VMOUSE_PRESS)
+		wp = text_window_at (&y, &x);
+	else {
+		wp = cur_wp;
+		WinNode *leaf = find_leaf_for (wp);
+		y = y > leaf->y ? y - leaf->y : 0;
+		x = x > leaf->x ? x - leaf->x : 0;
+	}
+	if (wp == NULL || !tracks_mouse (wp))
+		return false;
+	if (wp != cur_wp && button < 64)
+		window_set_current (wp);
+	vterm_mouse (wp->bp->shell->vt, button, action, (int) MIN (y, 0xffff), (int) MIN (x, 0xffff));
+	return true;
+}
+
 static bool
 F_term_paste (long uniarg, Args *args)
 {
@@ -706,7 +781,10 @@ terminal_init (void)
 		       "Keys go to the shell, except for C-x, which is a prefix for the usual\n"
 		       "C-x commands, and M-x. C-x C-x sends C-x, C-x C-y pastes the last\n"
 		       "killed text, and C-x C-j switches to line mode, where the scrollback\n"
-		       "is ordinary text; C-x C-k or q returns to char mode.");
+		       "is ordinary text; C-x C-k or q returns to char mode.\n"
+		       "\n"
+		       "A program that reads the mouse gets the clicks, drags and wheel\n"
+		       "in its window.");
 	lisp_func_new ("term", F_term, true,
 		       "Run PROGRAM in a terminal buffer named *terminal*.\n"
 		       "See `shell' for the keys.");

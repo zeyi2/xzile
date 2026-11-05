@@ -47,7 +47,13 @@ GNU Zile NEWS                                         -*- outline -*-
   scrollback as text to move around, search and copy, and C-x C-k or
   q returns. The terminal follows its window's size. C-u M-x shell
   starts another shell, and C-u N M-x shell switches to *shell*<N>,
-  starting it if needed.
+  starting it if needed. Programs that read the mouse (htop, vim with
+  mouse=a, mc, ...) get its clicks, drags and wheel.
+
+  The mouse works in a terminal too, as in xzile-gui: click to select
+  a window and move point, drag to set the region, and use the wheel
+  to scroll. Hold Shift (Option in some macOS terminals) to select
+  text with the terminal instead.
 
   Compilation: M-x compile runs a command (by default `make -k')
   asynchronously, with its output in *compilation*. next-error (C-x `,

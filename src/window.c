@@ -339,34 +339,20 @@ F_other_window (long uniarg, Args *args)
  * Mouse commands, for frontends that have a mouse.
  */
 
-typedef struct {
-	size_t y, x;
-	WinNode *leaf;
-} LeafAt;
-
-static void
-find_leaf_at (WinNode *leaf, void *data)
-{
-	LeafAt *d = data;
-	if (d->y >= leaf->y && d->y < leaf->y + leaf->height &&
-	    d->x >= leaf->x && d->x < leaf->x + leaf->width)
-		d->leaf = leaf;
-}
-
 /* The window at the last mouse event, or NULL if there is none (as in
    the minibuffer); `y' and `x' are set relative to the window. */
 static WinNode *
 mouse_leaf (size_t *y, size_t *x)
 {
-	LeafAt d = { 0, 0, NULL };
-	if (!term_mouse_position (&d.y, &d.x))
+	size_t my, mx;
+	if (!term_mouse_position (&my, &mx))
 		return NULL;
-	winnode_each_leaf (root_node, find_leaf_at, &d);
-	if (d.leaf != NULL) {
-		*y = d.y - d.leaf->y;
-		*x = d.x - d.leaf->x;
+	WinNode *leaf = layout_leaf_at (my, mx);
+	if (leaf != NULL) {
+		*y = my - leaf->y;
+		*x = mx - leaf->x;
 	}
-	return d.leaf;
+	return leaf;
 }
 
 /* Move point to the text shown at row `y', column `x' of the current

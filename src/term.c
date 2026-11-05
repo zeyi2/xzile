@@ -70,6 +70,7 @@ enum {
 	CODE_PASTE,		/* Start of a bracketed paste. */
 	CODE_IGNORE,		/* An unrecognised escape sequence. */
 	CODE_RESIZE,		/* The terminal was resized. */
+	CODE_MOUSE,		/* Mouse keystrokes from KBD_MOUSE_1 on. */
 };
 
 #define CODE_MOD_CTRL 0x100000u
@@ -81,6 +82,10 @@ enum {
 static const char BRACKETED_PASTE_ENABLE[] = "\033[?2004h";
 static const char BRACKETED_PASTE_DISABLE[] = "\033[?2004l";
 static const char BRACKETED_PASTE_END[] = "\033[201~";
+/* Button and drag reports, in the SGR encoding. Most terminals still
+   select text with Shift (Option in some macOS terminals) held. */
+static const char MOUSE_ENABLE[] = "\033[?1002h\033[?1006h";
+static const char MOUSE_DISABLE[] = "\033[?1002l\033[?1006l";
 
 
 /*--------------------------------------------------------------------------
@@ -117,6 +122,11 @@ static unsigned char inq[64];
 static size_t inq_n = 0;
 
 static char *pending_paste_text = NULL;
+
+static bool have_mouse = false;
+static size_t mouse_y, mouse_x;
+static int mouse_button;	/* The last button pressed, 0-2. */
+static bool mouse_to_shell;	/* It was pressed in a program reading the mouse. */
 
 
 /*--------------------------------------------------------------------------
@@ -157,6 +167,7 @@ enter_screen_mode (void)
 	/* Alternate screen, application cursor keys, bracketed paste. */
 	out_str ("\033[?1049h\033[?1h\033=");
 	out_str (BRACKETED_PASTE_ENABLE);
+	out_str (MOUSE_ENABLE);
 }
 
 static void
@@ -164,6 +175,7 @@ leave_screen_mode (void)
 {
 	out_str ("\033[0m");
 	out_str (BRACKETED_PASTE_DISABLE);
+	out_str (MOUSE_DISABLE);
 	out_str ("\033[?1l\033>\033[?25h\033[?1049l");
 }
 
@@ -739,6 +751,43 @@ tilde_to_code (long n)
 	}
 }
 
+/* The code for a mouse report of button code `cb' at 1-based column
+   `x', row `y'. Releases, drags and presses of buttons 2 and 3 are
+   only for programs reading the mouse; elsewhere they are ignored. */
+static unsigned
+mouse_code (unsigned cb, unsigned long x, unsigned long y, bool release)
+{
+	if (x == 0 || y == 0)
+		return CODE_IGNORE;
+	mouse_y = y - 1;
+	mouse_x = x - 1;
+	have_mouse = true;
+
+	cb &= ~(4u | 8u | 16u);	/* Modifiers. */
+	if (cb & 64)
+		return cb == 64 ? CODE_MOUSE + (KBD_WHEEL_UP - KBD_MOUSE_1)
+			: cb == 65 ? CODE_MOUSE + (KBD_WHEEL_DOWN - KBD_MOUSE_1) : CODE_IGNORE;
+	static const Keystroke press[] = { KBD_MOUSE_1, KBD_MOUSE_2, KBD_MOUSE_3 };
+	static const Keystroke drag[] = { KBD_DRAG_MOUSE_1, KBD_DRAG_MOUSE_2, KBD_DRAG_MOUSE_3 };
+	static const Keystroke up[] = { KBD_UP_MOUSE_1, KBD_UP_MOUSE_2, KBD_UP_MOUSE_3 };
+	unsigned b = cb & 3;
+	Keystroke key;
+	if (release || b == 3) {	/* The X10 encoding releases button 3. */
+		if (!release && (cb & 32))
+			return CODE_IGNORE;	/* Motion with no button. */
+		key = up[release && b < 3 ? b : (unsigned) mouse_button];
+	} else if (cb & 32)
+		key = drag[b];
+	else {
+		mouse_button = (int) b;
+		mouse_to_shell = shell_mouse_at (mouse_y, mouse_x);
+		key = press[b];
+	}
+	if (key != KBD_MOUSE_1 && key != KBD_DRAG_MOUSE_1 && !mouse_to_shell)
+		return CODE_IGNORE;
+	return CODE_MOUSE + (key - KBD_MOUSE_1);
+}
+
 /* Having read ESC from the terminal, try to decode an escape sequence.
    If the following bytes do not form one, they are pushed back and ESC
    is returned. */
@@ -808,6 +857,17 @@ decode_escape (void)
 					return CODE_F1 + (f - 'A');
 				return CODE_IGNORE;
 			}
+			if ((b == 'M' || b == 'm') && seq[1] == '<' && nparams == 3)
+				return mouse_code ((unsigned) params[0], (unsigned long) params[1],
+						   (unsigned long) params[2], b == 'm');
+			if (b == 'M' && n == 2) {
+				/* X10 encoding: three bytes, each offset by 32. */
+				unsigned v[3];
+				for (int i = 0; i < 3; i++)
+					if ((v[i] = read_byte (ESCAPE_DELAY)) < 32 || v[i] > 0xff)
+						return CODE_IGNORE;
+				return mouse_code (v[0] - 32, v[1] - 32, v[2] - 32, false);
+			}
 			unsigned mods = nparams >= 2 ? csi_modifiers (params[1]) : 0;
 			unsigned code;
 			if (b == '~')
@@ -860,6 +920,8 @@ codetokey (unsigned c)
 	if (c == CODE_NONE)
 		return KBD_NOKEY;
 
+	if (c >= CODE_MOUSE && c <= CODE_MOUSE + (KBD_DRAG_MOUSE_3 - KBD_MOUSE_1))
+		return KBD_MOUSE_1 + (c - CODE_MOUSE);
 	if (c >= CODE_UP) {
 		Keystroke mods = 0;
 		if (c & CODE_MOD_CTRL)
@@ -958,6 +1020,10 @@ keytocodes (Keystroke key, unsigned codes[2])
 
 	if (key == KBD_NOKEY)
 		return 0;
+	if (KBD_IS_MOUSE (key)) {
+		codes[n++] = CODE_MOUSE + (key - KBD_MOUSE_1);
+		return n;
+	}
 
 	if (key & KBD_META)	/* META */
 		codes[n++] = 033;
@@ -1107,7 +1173,7 @@ term_suspend (void)
 }
 
 /* A terminal reaches the clipboard through clipboard programs or OSC 52
-   (see clipboard.c), and has no mouse. */
+   (see clipboard.c). */
 bool
 term_clipboard_set (const char *text, size_t len)
 {
@@ -1126,7 +1192,7 @@ term_clipboard_get (size_t *len)
 bool
 term_mouse_position (size_t *y, size_t *x)
 {
-	(void) y;
-	(void) x;
-	return false;
+	*y = mouse_y;
+	*x = mouse_x;
+	return have_mouse;
 }

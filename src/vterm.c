@@ -20,8 +20,8 @@
 /* An xterm-compatible screen, as described by TERM=xterm-256color:
    cursor addressing, scrolling regions, insertion and deletion,
    deferred wrapping at the right margin, the alternate screen, 256 and
-   24-bit colours, DEC line drawing, bracketed paste, cursor and device
-   reports, and a scrollback of lines scrolled off the main screen. */
+   24-bit colours, DEC line drawing, bracketed paste, mouse tracking,
+   cursor and device reports, and a scrollback of lines scrolled off the main screen. */
 
 #include "xzile.h"
 
@@ -65,6 +65,8 @@ struct VTerm {
 	int top, bot;		/* Scrolling region, inclusive. */
 	bool origin, autowrap, insert;
 	bool app_cursor, app_keypad, cursor_visible, bracketed_paste;
+	int mouse_mode;		/* 0, or the DECSET mode: 9, 1000, 1002 or 1003. */
+	int mouse_enc;		/* 0 (X10 bytes), or 1005, 1006 or 1015. */
 	bool *tabs;
 	bool g0_graphics, g1_graphics, shift_out;
 	SavedCursor saved_main, saved_alt;
@@ -217,6 +219,7 @@ reset (VTerm *t)
 	t->app_cursor = t->app_keypad = false;
 	t->cursor_visible = true;
 	t->bracketed_paste = false;
+	t->mouse_mode = t->mouse_enc = 0;
 	t->g0_graphics = t->g1_graphics = t->shift_out = false;
 	t->on_alt = false;
 	t->screen = t->main;
@@ -358,6 +361,12 @@ vterm_bracketed_paste (const VTerm *t)
 	return t->bracketed_paste;
 }
 
+bool
+vterm_mouse_tracking (const VTerm *t)
+{
+	return t->mouse_mode != 0;
+}
+
 size_t
 vterm_scrollback_len (const VTerm *t)
 {
@@ -380,6 +389,46 @@ reply (VTerm *t, const char *s)
 {
 	if (t->write != NULL)
 		t->write (s, strlen (s), t->data);
+}
+
+bool
+vterm_mouse (VTerm *t, int button, enum VMouseAction action, int y, int x)
+{
+	bool wheel = button >= 64;
+	if (t->mouse_mode == 0 ||
+	    (t->mouse_mode == 9 && (action != VMOUSE_PRESS || wheel)) ||
+	    (action == VMOUSE_DRAG && t->mouse_mode < 1002) ||
+	    (action == VMOUSE_RELEASE && wheel))
+		return false;
+	x = MIN (MAX (x, 0), t->cols - 1) + 1;
+	y = MIN (MAX (y, 0), t->rows - 1) + 1;
+	int cb = button + (action == VMOUSE_DRAG ? 32 : 0);
+
+	char buf[32];
+	if (t->mouse_enc == 1006)
+		snprintf (buf, sizeof buf, "\033[<%d;%d;%d%c", cb, x, y, action == VMOUSE_RELEASE ? 'm' : 'M');
+	else {
+		/* The other encodings cannot say which button was released. */
+		if (action == VMOUSE_RELEASE)
+			cb = 3;
+		if (t->mouse_enc == 1015)
+			snprintf (buf, sizeof buf, "\033[%d;%d;%dM", cb + 32, x, y);
+		else if (t->mouse_enc == 1005) {
+			if (x > 2015 || y > 2015)
+				return true;
+			size_t n = (size_t) snprintf (buf, sizeof buf, "\033[M");
+			n += utf8_encode ((uint32_t) cb + 32, buf + n);
+			n += utf8_encode ((uint32_t) x + 32, buf + n);
+			n += utf8_encode ((uint32_t) y + 32, buf + n);
+			buf[n] = '\0';
+		} else {
+			if (x > 223 || y > 223)
+				return true;
+			snprintf (buf, sizeof buf, "\033[M%c%c%c", cb + 32, x + 32, y + 32);
+		}
+	}
+	reply (t, buf);
+	return true;
 }
 
 static void
@@ -565,6 +614,18 @@ set_mode (VTerm *t, bool on)
 				}
 				break;
 			case 2004: t->bracketed_paste = on; break;
+			case 9:
+			case 1000:
+			case 1002:
+			case 1003: t->mouse_mode = on ? m : 0; break;
+			case 1005:
+			case 1006:
+			case 1015:
+				if (on)
+					t->mouse_enc = m;
+				else if (t->mouse_enc == m)
+					t->mouse_enc = 0;
+				break;
 			default: break;
 			}
 		else if (t->private_mark == 0 && m == 4)
