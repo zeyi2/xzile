@@ -387,6 +387,7 @@ buffer_replace_estr (Buffer *bp, size_t del, EstrView es)
 	size_t pt = bp->pt_;
 	invalidate_line_index_at (bp, pt);
 	invalidate_syntax_cache_at (bp, pt);
+	bp->changes++;
 
 	size_t newlen = ev_len_with_eol (es, buffer_eol (bp));
 	if (!bp->noundo)

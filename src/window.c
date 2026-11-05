@@ -216,6 +216,29 @@ popup_window (void)
 /* A sole window at least this wide is split side by side for a link. */
 #define LINK_SPLIT_WIDTH 40
 
+/* The nearest window to the left of `from' beside it, or NULL. */
+static Window *
+window_left_of (Window *from)
+{
+	WinNode *f = find_leaf_for (from);
+	Window *left = NULL;
+	size_t left_edge = 0, left_overlap = 0;
+	for (Window *wp = head_wp; wp != NULL && f != NULL; wp = wp->next) {
+		WinNode *n = wp != from ? find_leaf_for (wp) : NULL;
+		if (n == NULL)
+			continue;
+		size_t top = MAX (n->y, f->y), bottom = MIN (n->y + n->height, f->y + f->height);
+		size_t overlap = bottom > top ? bottom - top : 0, edge = n->x + n->width;
+		if (edge <= f->x && overlap > 0 &&
+		    (left == NULL || edge > left_edge || (edge == left_edge && overlap > left_overlap))) {
+			left = wp;
+			left_edge = edge;
+			left_overlap = overlap;
+		}
+	}
+	return left;
+}
+
 /* The window in which to show a file for a link followed in the
    current window `from': the nearest window to the left of `from',
    else one showing `bp' already (if not NULL), else another window,
@@ -225,30 +248,17 @@ popup_window (void)
 Window *
 window_for_link (Window *from, const Buffer *bp)
 {
-	WinNode *f = find_leaf_for (from);
-	Window *left = NULL, *other = NULL;
-	size_t left_edge = 0, left_overlap = 0;
-	for (Window *wp = head_wp; wp != NULL && f != NULL; wp = wp->next) {
-		WinNode *n = wp != from ? find_leaf_for (wp) : NULL;
-		if (n == NULL)
-			continue;
-		size_t top = MAX (n->y, f->y), bottom = MIN (n->y + n->height, f->y + f->height);
-		size_t overlap = bottom > top ? bottom - top : 0, edge = n->x + n->width;
-		if (edge <= f->x && overlap > 0) {
-			if (left == NULL || edge > left_edge || (edge == left_edge && overlap > left_overlap)) {
-				left = wp;
-				left_edge = edge;
-				left_overlap = overlap;
-			}
-		} else if (other == NULL || (other->bp->shell != NULL && wp->bp->shell == NULL))
-			other = wp;
-	}
+	Window *left = window_left_of (from), *other = NULL;
 	if (left != NULL)
 		return left;
 	if (bp != NULL)
 		for (Window *wp = head_wp; wp != NULL; wp = wp->next)
 			if (wp != from && wp->bp == bp)
 				return wp;
+	for (Window *wp = find_leaf_for (from) != NULL ? head_wp : NULL; wp != NULL; wp = wp->next)
+		if (wp != from && find_leaf_for (wp) != NULL &&
+		    (other == NULL || (other->bp->shell != NULL && wp->bp->shell == NULL)))
+			other = wp;
 	if (other != NULL)
 		return other;
 
@@ -438,6 +448,115 @@ follow_link (size_t y, size_t x, bool on_text)
 	if (cur_bp->shell != NULL || cur_bp->compilation != NULL)
 		return follow_reference_at (cur_wp, buffer_pt (cur_bp));
 	return false;
+}
+
+/* The line shown at row `y' of `wp', at `*lo', and the byte of it at
+   column `x', at `*i', as move_point_to_cell finds them for a click;
+   false if no character of the line is there. */
+static bool
+text_at_cell (Window *wp, size_t y, size_t x, size_t *lo, size_t *i)
+{
+	Buffer *bp = wp->bp;
+	size_t gutter = wp->gutter_width;
+	if (x < gutter)
+		return false;
+	size_t o = window_o (wp), line = buffer_offset_to_line (bp, o);
+	long n = (long) y - (long) MIN (wp->topdelta, line);
+	size_t l = buffer_start_of_line (bp, o);
+	for (; n < 0 && l != NOPOS; n++)
+		l = buffer_prev_line (bp, l);
+	for (; n > 0 && l != NOPOS; n--)
+		l = buffer_next_line (bp, l);
+	if (l == NOPOS)
+		return false;
+
+	/* As buffer_goto_goalc. */
+	size_t goalc = x - gutter + wp->start_column, col = 0, t = buffer_tab_width (bp);
+	size_t j = l, end = buffer_end_of_line (bp, l);
+	while (j < end && col < goalc) {
+		size_t len;
+		uint32_t ch = buffer_get_utf8_char (bp, j, &len);
+		size_t w = ch == '\t' ? t - col % t : (size_t) utf8_char_display_width (ch);
+		if (col + w > goalc)
+			break;
+		col += w;
+		j += len;
+	}
+	if (j == end)
+		return false;
+	*lo = l;
+	*i = j - l;
+	return true;
+}
+
+/* The column of `wp' at which byte `i' of the line at `lo' is shown. */
+static size_t
+column_of (Window *wp, size_t lo, size_t i)
+{
+	size_t col = buffer_calculate_goalc (wp->bp, lo + i);
+	col = col > wp->start_column ? col - wp->start_column : 0;
+	return MIN (wp->gutter_width + col, wp->ewidth);
+}
+
+/* What a click on a link in `wp' to `target' does, as a hint. */
+static char *
+link_hint (Window *wp, const char *target, enum LinkKind kind)
+{
+	const char *action;
+	if (kind == LINK_DIR)
+		action = "Click to list it in this window";
+	else if (kind == LINK_FILE_OR_DIR)
+		action = "Click to open it, or to list it here if it is a directory";
+	else if (window_left_of (wp) != NULL)
+		action = "Click to open it in the window on the left";
+	else if (head_wp->next == NULL && wp->fwidth >= LINK_SPLIT_WIDTH)
+		action = "Click to open it on the left, splitting the window";
+	else if (head_wp->next == NULL)
+		action = "Click to open it in a new window";
+	else
+		action = "Click to open it in another window";
+	return xasprintf ("%s\n%s", target, action);
+}
+
+bool
+link_at (size_t y, size_t x, ScreenLink *link)
+{
+	/* Not while a command has the current buffer in another window. */
+	if (term_minibuf_active () || cur_wp == NULL || cur_wp->bp != cur_bp)
+		return false;
+	WinNode *leaf = layout_leaf_at (y, x);
+	if (leaf == NULL)
+		return false;
+	Window *wp = leaf->wp;
+	Buffer *bp = wp->bp;
+	size_t wy = y - leaf->y, wx = x - leaf->x, x0, x1, lo, i;
+	if (wy >= wp->eheight || wx >= wp->ewidth)
+		return false;
+
+	char *target;
+	enum LinkKind kind = LINK_FILE;
+	LinkSpan span;
+	if (shell_char_mode (bp)) {
+		if (!shell_link_at (wp, wy, wx, &x0, &x1, &target))
+			return false;
+	} else {
+		if (preview_showing (bp) || !text_at_cell (wp, wy, wx, &lo, &i))
+			return false;
+		if (bp->dired != NULL) {
+			if (!dired_link_at (bp, lo, i, &span, &target, &kind))
+				return false;
+		} else if ((bp->shell == NULL && bp->compilation == NULL) || !references_followable (bp) ||
+			   !reference_line_link_at (bp, lo, i, &span, &target))
+			return false;
+		x0 = column_of (wp, lo, span.start);
+		x1 = column_of (wp, lo, span.end);
+	}
+	link->y = y;
+	link->x0 = leaf->x + x0;
+	link->x1 = leaf->x + MAX (x1, x0 + 1);
+	link->hint = link_hint (wp, target, kind);
+	free (target);
+	return true;
 }
 
 static bool

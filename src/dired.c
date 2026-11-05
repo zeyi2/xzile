@@ -1424,12 +1424,29 @@ visit (Remote *r, const char *path, bool dir)
 	return file_is_dir (path) ? dired (path) : find_file (path);
 }
 
+/* Whether the line at `lo' lists a directory. */
+static bool
+lists_dir (Buffer *bp, size_t lo)
+{
+	return buffer_end_of_line (bp, lo) > lo + 2 && buffer_get_char (bp, lo + 2) == 'd';
+}
+
 /* Whether the current line lists a directory. */
 static bool
 line_is_dir (Buffer *bp)
 {
-	size_t lo = buffer_line_o (bp);
-	return buffer_end_of_line (bp, lo) > lo + 2 && buffer_get_char (bp, lo + 2) == 'd';
+	return lists_dir (bp, buffer_line_o (bp));
+}
+
+/* The file of the entry `name' of `bp'. */
+static char *
+name_path (Buffer *bp, const char *name)
+{
+	if (strcmp (name, ".") == 0)
+		return xstrdup (bp->dired->dir);
+	if (strcmp (name, "..") == 0)
+		return path_dirname (bp->dired->dir);
+	return entry_path (bp, name);
 }
 
 static char *
@@ -1442,13 +1459,7 @@ current_path (void)
 		minibuf_error ("No file on this line");
 		return NULL;
 	}
-	char *path;
-	if (strcmp (name, ".") == 0)
-		path = xstrdup (cur_bp->dired->dir);
-	else if (strcmp (name, "..") == 0)
-		path = path_dirname (cur_bp->dired->dir);
-	else
-		path = entry_path (cur_bp, name);
+	char *path = name_path (cur_bp, name);
 	free (name);
 	return path;
 }
@@ -1484,6 +1495,38 @@ F_dired_find_file_other_window (long uniarg, Args *args)
 	return ok;
 }
 
+bool
+dired_link_at (Buffer *bp, size_t lo, size_t i, LinkSpan *span, char **target, enum LinkKind *kind)
+{
+	char *name = bp->dired != NULL ? line_entry (bp, lo) : NULL;
+	if (name == NULL)
+		return false;
+	size_t start = bp->dired->name_col, end = start + strlen (name);
+	if (i < start || i >= end) {
+		free (name);
+		return false;
+	}
+	*span = (LinkSpan) { start, end };
+	char *path = name_path (bp, name);
+	free (name);
+	if (lists_dir (bp, lo))
+		*kind = LINK_DIR;
+	else if (buffer_get_char (bp, lo + 2) != 'l')
+		*kind = LINK_FILE;
+	else if (bp->remote != NULL)
+		*kind = LINK_FILE_OR_DIR;
+	else
+		*kind = file_is_dir (path) ? LINK_DIR : LINK_FILE;
+	if (bp->remote != NULL) {
+		*target = xasprintf ("%s on %s", path, remote_label (bp->remote));
+		free (path);
+	} else {
+		*target = compact_path (path);
+		free (path);
+	}
+	return true;
+}
+
 /* A click at `o', on the line of point in the current Dired buffer:
    on the name of a directory, list it in this window; on the name of a
    file, visit it in another one (see window_for_link), keeping the
@@ -1493,13 +1536,12 @@ dired_follow_link (size_t o)
 {
 	Buffer *bp = cur_bp;
 	size_t lo = buffer_start_of_line (bp, o);
-	char *name = line_entry (bp, lo);
-	if (name == NULL)
+	LinkSpan span;
+	char *target;
+	enum LinkKind kind;
+	if (!dired_link_at (bp, lo, o - lo, &span, &target, &kind))
 		return false;
-	size_t start = lo + bp->dired->name_col, end = start + strlen (name);
-	free (name);
-	if (o < start || o >= end)
-		return false;
+	free (target);
 
 	Remote *r = bp->remote;
 	bool dir = line_is_dir (bp);

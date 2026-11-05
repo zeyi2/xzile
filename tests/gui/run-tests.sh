@@ -25,7 +25,10 @@
 # sdl-inject.c) and then saves and quits; the file must then equal
 # TEST.output. A "# locales:" line lists the locales to run the test in;
 # the default, C, is what an app started from Finder or a desktop menu
-# gets. SDL's dummy video driver is used unless SDL_VIDEODRIVER is set,
+# gets. If there is a TEST.hover, the links the pointer hovered, as the
+# "hover" debug log gives them (see update_hover in gui.c), must match
+# its lines, each a shell pattern, in turn.
+# SDL's dummy video driver is used unless SDL_VIDEODRIVER is set,
 # so no display is needed. Set XZILE_GUI to the editor to test (default:
 # src/xzile-gui). The events are injected with LD_PRELOAD, so this runs
 # on Linux; it needs CC (default: cc), PKG_CONFIG and SDL2's headers.
@@ -46,6 +49,24 @@ ${CC:-cc} -shared -fPIC `${PKG_CONFIG:-pkg-config} --cflags sdl2` -o "$work/sdl-
 	"$srcdir/tests/gui/sdl-inject.c" -ldl || exit 1
 mkdir "$work/home"
 
+# Whether the lines of the hover log $2, without their times, match the
+# patterns on the lines of $1.
+match_hover () {
+	sed 's/^\[[0-9]*\] hover: //' "$2" > "$2.lines" 2>/dev/null
+	if [ "$(grep -c '' < "$1")" -ne "$(grep -c '' < "$2.lines")" ] ||
+	   ! paste -d '\n' "$1" "$2.lines" | {
+		while IFS= read -r pattern && IFS= read -r line; do
+			case $line in
+				$pattern) ;;
+				*) exit 1 ;;
+			esac
+		done
+	   }; then
+		diff -u "$1" "$2.lines"
+		return 1
+	fi
+}
+
 run_test () {
 	test=${1%.events}
 	name=${test##*/}
@@ -62,11 +83,14 @@ run_test () {
 		esac
 		edit_file=$work/$name.txt
 		cp "$input_file" "$edit_file" || return 1
+		hover_log=
+		[ -e "$test.hover" ] && hover_log=$work/$name.hover && rm -f "$hover_log"
 		# Every test ends by saving and quitting.
 		{ echo "sleep 500"; cat "$test.events"
 		  printf 'sleep 300\ndown x ctrl\ndown s ctrl\nsleep 300\ndown x ctrl\ndown c ctrl\n'
 		} > "$work/events"
 		errors=$(env -u LANG -u LC_CTYPE HOME="$work/home" LC_ALL=$loc \
+			XZILE_DEBUG=${hover_log:+hover} XZILE_DEBUG_LOG="$hover_log" \
 			XZ_INJECT="$work/events" LD_PRELOAD="$work/sdl-inject.so" \
 			timeout 30 "$editor" --no-init-file "$edit_file" 2>&1 >/dev/null)
 		status=$?
@@ -76,6 +100,9 @@ run_test () {
 			fail=$((fail + 1))
 		elif ! diff -u "$test.output" "$edit_file"; then
 			echo "FAIL: $name [$loc]: wrong output"
+			fail=$((fail + 1))
+		elif [ -n "$hover_log" ] && ! match_hover "$test.hover" "$hover_log"; then
+			echo "FAIL: $name [$loc]: wrong links hovered"
 			fail=$((fail + 1))
 		else
 			pass=$((pass + 1))

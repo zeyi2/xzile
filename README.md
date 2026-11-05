@@ -62,6 +62,11 @@ What the window adds to the terminal editor:
   to visit that place in the window on the left (a sole window is
   split side by side for it), or a name in Dired to visit that file
   there or list that directory in place. This works in `xzile` too.
+  References are underlined in the `link` face; under the pointer, a
+  reference or name is shown in the `link-hover` face with a tooltip
+  (the `tooltip` face) naming the file, the place and what a click
+  does. No links are shown while a program in the terminal reads the
+  mouse.
 - Drag a status bar, or the border between side-by-side windows, to
   resize them.
 - Kills and yanks use the system clipboard; middle-click pastes.

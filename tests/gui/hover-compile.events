@@ -1,0 +1,60 @@
+# Hovering over references in *compilation*: the location of a warning,
+# coloured as a warning, and a reference after a CJK character, each
+# highlighted by itself; a CJK character and the location of an error
+# in a file that does not exist are not links. Hovering changes neither
+# point, the mark nor the current window: the region set before is
+# killed after, and a click then still opens the reference. The hand
+# pointer and the highlight go with the hover, also when a key ends it.
+down x alt
+text x
+up x alt
+sleep 200
+text compile
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text printf '%s:2:1: warning: w\n
+text \346\226\207 %s:4:3\nnosuch.c:1:1:
+text  error: e\n' hover-compile.txt
+text  hover-compile.txt
+down Return
+sleep 1500
+down space ctrl
+up space ctrl
+down f ctrl
+up f ctrl
+down f ctrl
+up f ctrl
+sleep 200
+# *compilation* is from row 17, its output from row 21.
+sample rest 21 5
+move 21 5
+sleep 200
+cursor hand
+sample hovered 21 5
+differ rest hovered
+move 22 1
+sleep 200
+cursor ibeam
+sample left 21 5
+same rest left
+move 22 3
+sleep 200
+move 23 3
+sleep 200
+move 21 20
+sleep 200
+cursor hand
+# A key ends the hover, though the pointer stays over the link.
+down w ctrl
+up w ctrl
+sleep 300
+cursor ibeam
+sample typed 21 5
+same rest typed
+click 22 10
+sleep 300
+text A

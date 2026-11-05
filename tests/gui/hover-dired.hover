@@ -1,0 +1,6 @@
+row *, columns * "home", hint below: /*/home|Click to list it in this window
+none
+row *, columns * "hover-dired.txt", hint below: /*/hover-dired.txt|Click to open it on the left, splitting the window
+row *, columns * "hover-dired.hover", hint below: /*/hover-dired.hover|Click to open it on the left, splitting the window
+row *, columns * "hover-dired.txt", hint below: /*/hover-dired.txt|Click to open it on the left, splitting the window
+none

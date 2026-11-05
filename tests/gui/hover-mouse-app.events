@@ -1,0 +1,50 @@
+# A program in a terminal that reads the mouse gets the pointer over a
+# reference: it is not a link, and a click on it goes to the program.
+# Once the program stops reading the mouse, the reference is a link,
+# and is underlined.
+# (The minibuffer would take a typed "?" for a request for help.)
+down x alt
+text x
+up x alt
+sleep 200
+text term
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text sh -c "printf
+text  '\033[\0771000h%s:3:2\n'
+text  hover-mouse-app.txt;
+text  read x; printf
+text  '\033[\0771000l'; read y"
+down Return
+sleep 1000
+move 0 3
+sleep 200
+cursor ibeam
+sample owned 0 3
+click 0 3
+sleep 300
+down Return
+sleep 500
+sample free 0 3
+differ owned free
+move 0 4
+sleep 200
+cursor hand
+click 0 4
+sleep 300
+text A
+sleep 300
+# End the program, so that quitting asks nothing.
+click 10 60
+sleep 200
+down Return
+sleep 500
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200

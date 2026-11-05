@@ -229,11 +229,55 @@ is_primary_window (Window *wp)
 	return false;
 }
 
+/* Row `y' of the terminal `bp' as shown, as UTF-8 in `sb'. The byte
+   of the character shown at column `x' is `at[x]'; `at' has a column
+   more than the terminal, for the end of the row. */
 static void
-put_vcell (const VCell *c)
+row_text (Buffer *bp, int y, StrBuf *sb, size_t *at)
+{
+	VTerm *vt = bp->shell->vt;
+	int cols = vterm_cols (vt);
+	const VCell *cells = vterm_cell (vt, y, 0);
+	for (int c = 0; c < cols; c++) {
+		const VCell *cell = &cells[c];
+		/* The right half of a wide character is the character. */
+		at[c] = cell->width == 0 && c > 0 ? at[c - 1] : sb->len;
+		if (cell->width == 0)
+			continue;
+		uint32_t cp = cell->cp == 0 || (cell->attr.flags & VATTR_INVISIBLE) ? ' ' : cell->cp;
+		char buf[4];
+		sb_addn (sb, buf, utf8_encode (cp, buf));
+	}
+	at[cols] = sb->len;
+}
+
+/* Set `link_col[x]' for each column `x' of row `y' of the terminal `bp'
+   that shows a reference a click would follow. */
+static void
+row_links (Buffer *bp, int y, size_t *at, bool *link_col)
+{
+	StrBuf sb;
+	sb_init (&sb);
+	row_text (bp, y, &sb, at);
+	LinkSpan *spans;
+	size_t n = reference_links (bp, sb.s, sb.len, NOPOS, &spans), k = 0;
+	for (int x = 0; x < vterm_cols (bp->shell->vt); x++) {
+		while (k < n && spans[k].end <= at[x])
+			k++;
+		link_col[x] = k < n && at[x] >= spans[k].start;
+	}
+	free (spans);
+	sb_free (&sb);
+}
+
+static bool tracks_mouse (const Window *wp);
+static void
+put_vcell (const VCell *c, bool link)
 {
 	VAttr a = c->attr;
 	term_set_vattr (&a);
+	if (link)
+		term_mark_link (a.fg == VCOLOR_DEFAULT && !(a.flags & VATTR_REVERSE));
 	if (c->cp == ' ' || c->cp == 0 || (a.flags & VATTR_INVISIBLE))
 		term_addch (' ');
 	else {
@@ -259,9 +303,15 @@ shell_draw (Window *wp, size_t topline, size_t leftcol)
 	}
 
 	int vrows = vterm_rows (sh->vt), vcols = vterm_cols (sh->vt);
+	/* References are shown as links, unless the program reads the mouse. */
+	bool links = !tracks_mouse (wp) && references_followable (wp->bp);
+	bool *link_col = xzalloc ((size_t) vcols * sizeof *link_col);
+	size_t *at = xmalloc (((size_t) vcols + 1) * sizeof *at);
 	for (size_t y = 0; y < wp->eheight; y++) {
 		term_move (topline + y, leftcol);
 		size_t x = 0;
+		if (links && (int) y < vrows)
+			row_links (wp->bp, (int) y, at, link_col);
 		if ((int) y < vrows)
 			for (; x < wp->ewidth && (int) x < vcols; x++) {
 				const VCell *c = vterm_cell (sh->vt, (int) y, (int) x);
@@ -272,7 +322,7 @@ shell_draw (Window *wp, size_t topline, size_t leftcol)
 					term_addch (' ');
 					continue;
 				}
-				put_vcell (c);
+				put_vcell (c, links && link_col[x]);
 				if (c->width == 2)
 					x++;
 			}
@@ -280,6 +330,8 @@ shell_draw (Window *wp, size_t topline, size_t leftcol)
 		for (; x < wp->ewidth; x++)
 			term_addch (' ');
 	}
+	free (at);
+	free (link_col);
 	term_attrset (FONT_NORMAL);
 	return true;
 }
@@ -663,22 +715,43 @@ shell_follow_link (Window *wp, size_t y, size_t x)
 	if ((int) y >= vterm_rows (vt) || (int) x >= cols || x >= wp->ewidth)
 		return false;
 
-	/* The row as shown, and the byte of the clicked cell. */
-	const VCell *cells = vterm_cell (vt, (int) y, 0);
 	StrBuf sb;
 	sb_init (&sb);
-	size_t at = NOPOS;
-	for (int c = 0; c < cols; c++) {
-		const VCell *cell = &cells[c];
-		if (cell->width == 0)
-			continue;
-		if ((size_t) c == x || (cell->width == 2 && (size_t) c + 1 == x))
-			at = sb.len;
-		uint32_t cp = cell->cp == 0 || (cell->attr.flags & VATTR_INVISIBLE) ? ' ' : cell->cp;
-		char buf[4];
-		sb_addn (&sb, buf, utf8_encode (cp, buf));
+	size_t *at = xmalloc (((size_t) cols + 1) * sizeof *at);
+	row_text (wp->bp, (int) y, &sb, at);
+	bool ok = follow_reference (wp, sb.s != NULL ? sb.s : "", sb.len, at[x], NOPOS);
+	free (at);
+	sb_free (&sb);
+	return ok;
+}
+
+bool
+shell_link_at (Window *wp, size_t y, size_t x, size_t *x0, size_t *x1, char **target)
+{
+	if (!shell_char_mode (wp->bp) || tracks_mouse (wp))
+		return false;
+	VTerm *vt = wp->bp->shell->vt;
+	int cols = vterm_cols (vt);
+	if ((int) y >= vterm_rows (vt) || (int) x >= cols || x >= wp->ewidth ||
+	    !references_followable (wp->bp))
+		return false;
+
+	StrBuf sb;
+	sb_init (&sb);
+	size_t *at = xmalloc (((size_t) cols + 1) * sizeof *at);
+	row_text (wp->bp, (int) y, &sb, at);
+	LinkSpan span;
+	bool ok = reference_link_at (wp->bp, sb.s, sb.len, at[x], NOPOS, &span, target);
+	if (ok) {
+		size_t c = x;
+		while (c > 0 && at[c - 1] >= span.start)
+			c--;
+		*x0 = c;
+		for (c = x + 1; (int) c < cols && at[c] < span.end; c++)
+			;
+		*x1 = MIN (c, wp->ewidth);
 	}
-	bool ok = at != NOPOS && follow_reference (wp, sb.s, sb.len, at, NOPOS);
+	free (at);
 	sb_free (&sb);
 	return ok;
 }

@@ -1,0 +1,51 @@
+# Hovering over names in Dired: a directory's says a click lists it
+# here; a file's, that a click opens it on the left. Only the name is a
+# link, not its date nor the space after the line. Hovering does not
+# move point: RET then visits the file that point was on. Only the name
+# hovered is highlighted, with a hand pointer.
+down x ctrl
+up x ctrl
+down d
+text d
+sleep 300
+down Return
+up Return
+sleep 800
+down s ctrl
+up s ctrl
+text home
+down Return
+up Return
+sleep 300
+sample name . .-2
+sample date . .-12
+move . .-2
+sleep 200
+cursor hand
+sample name-on . .-2
+sample date-off . .-12
+differ name name-on
+same date date-off
+move . .-12
+sleep 200
+cursor ibeam
+sample name-off . .-2
+same name name-off
+down s ctrl
+up s ctrl
+text hover-dired.txt
+down Return
+up Return
+sleep 300
+move . .-3
+sleep 200
+move .-1 .-3
+sleep 200
+move . .-3
+sleep 200
+move . .+3
+sleep 200
+down Return
+up Return
+sleep 300
+text F

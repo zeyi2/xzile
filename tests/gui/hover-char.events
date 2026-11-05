@@ -1,0 +1,85 @@
+# Hovering over FILE:LINE:COL references in a terminal in char mode,
+# after CJK characters: each reference is highlighted by itself, with a
+# hint naming the file, the place and what a click does. The space
+# before a reference, the text between references, a CJK character and
+# leaving the window show none. Hovering moves neither point nor the
+# current window: after a click opens the file on the left, text typed
+# while the pointer is over the terminal goes to the file, at the place
+# the click opened.
+down x alt
+text x
+up x alt
+sleep 200
+text term
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text sh -c "printf '\346\226\207
+text \345\255\227 %s:3:2 x %s:5:1
+text \n' hover-char.txt
+text  hover-char.txt; read x"
+down Return
+sleep 1000
+# The row is "文字 hover-char.txt:3:2 x hover-char.txt:5:1".
+sample first 0 8
+sample second 0 30
+sample cjk 0 1
+move 0 8
+sleep 200
+cursor hand
+sample first-on 0 8
+sample second-off 0 30
+sample cjk-off 0 1
+differ first first-on
+same second second-off
+same cjk cjk-off
+move 0 30
+sleep 200
+sample first-off 0 8
+sample second-on 0 30
+same first first-off
+differ second second-on
+move 0 24
+sleep 200
+cursor ibeam
+sample first-gap 0 8
+sample second-gap 0 30
+same first first-gap
+same second second-gap
+move 0 4
+sleep 200
+move 0 5
+sleep 200
+move 0 1
+sleep 200
+move 0 22
+sleep 200
+leave
+sleep 200
+cursor ibeam
+sample first-left 0 8
+same first first-left
+move 0 10
+sleep 200
+click 0 10
+sleep 300
+text A
+sleep 300
+# The terminal is now in the right half, from column 50.
+move 0 60
+sleep 200
+text B
+sleep 300
+# End the program, so that quitting asks nothing.
+click 10 60
+sleep 200
+down Return
+sleep 500
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200

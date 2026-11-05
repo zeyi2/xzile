@@ -66,6 +66,16 @@ GNU Zile NEWS                                         -*- outline -*-
   programs that read the mouse still get it. In a remote terminal the
   file is visited on its machine; a terminal that reports another host
   by OSC 7, or runs ssh in the foreground, refuses such clicks.
+  References that a click would follow are underlined in the link face
+  (keeping the colours of error and warning locations in
+  *compilation*); in a remote terminal they are recognized by their
+  form alone, the file being looked for only when clicked. In
+  xzile-gui, the link under the pointer, and only the reference or
+  name itself, is shown in the link-hover face with a hand pointer and
+  a tooltip (the tooltip face) giving the file, the line and column,
+  and what a click does. None is shown while a program reads the
+  mouse, and the hover goes when a key is pressed, the pointer leaves
+  the window, or the text under it changes.
 
   Compilation: M-x compile runs a command (by default `make -k')
   asynchronously, with its output in *compilation*. next-error (C-x `,

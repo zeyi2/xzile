@@ -258,6 +258,20 @@ term_apply_face (const char *face_name)
 }
 
 void
+term_mark_link (bool plain)
+{
+	TerminalStyle style;
+	if (!resolve_terminal_style (FACE_LINK, &style))
+		return;
+	if (style.underline)
+		cur_attr.flags |= ATTR_UNDERLINE;
+	if (style.bold)
+		cur_attr.flags |= ATTR_BOLD;
+	if (plain && style.has_foreground)
+		cur_attr.fg = style.foreground;
+}
+
+void
 term_set_vattr (const VAttr *a)
 {
 	cur_attr.fg = a->fg;

@@ -43,6 +43,10 @@ A click on a FILE:LINE[:COL] reference in a terminal or in
 *compilation* visits that place in the window on the left (a sole
 window is split side by side for it); in Dired, a click on a name
 visits the file there or lists the directory in place.
+References are underlined in the \fBlink\fR face; in xzile-gui the
+reference or name under the pointer is shown in the \fBlink-hover\fR
+face, with a tooltip in the \fBtooltip\fR face naming the file, the
+line and column, and what a click does.
 A terminal that reports another host by OSC 7, or runs ssh in the
 foreground, refuses such clicks rather than visit a local file.
 ssh runs with BatchMode=yes, so keys or an agent are needed and host

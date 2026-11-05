@@ -1,0 +1,36 @@
+# Output under the pointer changes the link it hovers, with no motion:
+# the reference it was over is replaced by another, which a click then
+# opens.
+down x alt
+text x
+up x alt
+sleep 200
+text term
+down Return
+sleep 300
+down a ctrl
+up a ctrl
+down k ctrl
+up k ctrl
+text sh -c "printf '%s:3:2\n'
+text  hover-output.txt; sleep 2;
+text  printf '\033[Hx %s:5:1\n'
+text  hover-output.txt; read x"
+down Return
+sleep 1000
+move 0 3
+sleep 2500
+click 0 3
+sleep 300
+text A
+sleep 300
+# End the program, so that quitting asks nothing.
+click 10 60
+sleep 200
+down Return
+sleep 500
+down x ctrl
+up x ctrl
+down o
+text o
+sleep 200

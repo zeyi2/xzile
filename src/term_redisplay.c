@@ -96,7 +96,7 @@ find_parens (Window *wp)
 static void
 draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 	   size_t o, const Region *r, bool highlight, size_t cur_tab_width,
-	   const char *gutter_str, size_t gutter_width, const char *gutter_face_name)
+	   const char *gutter_str, size_t gutter_width, const char *gutter_face_name, bool links)
 {
 	Buffer *bp = wp->bp;
 	term_move (line, leftcol);
@@ -117,6 +117,9 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 		int start_state = buffer_get_line_start_state (bp, line_idx);
 		bp->highlighter->scan_line (bp->highlighter, bp, line_idx, o, line_len, start_state, syntax_faces);
 	}
+	/* References that a click would follow, shown as links. */
+	LinkSpan *spans = NULL;
+	size_t nspans = links && line_len > 0 ? reference_line_links (bp, o, &spans) : 0, k = 0;
 
 	size_t i = 0;	/* byte index within the line */
 	size_t col = 0;	/* accumulated display column (from line start) */
@@ -140,11 +143,20 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 
 		bool in_highlight = highlight && r != NULL && region_contains (*r, o + i);
 		const char *face_name = FACE_DEFAULT;
-		if (syntax_faces != NULL && syntax_faces[i] != NULL)
+		bool plain = true;
+		if (syntax_faces != NULL && syntax_faces[i] != NULL) {
 			face_name = syntax_faces[i];
-		if (o + i == paren_at[0] || o + i == paren_at[1])
+			plain = false;
+		}
+		if (o + i == paren_at[0] || o + i == paren_at[1]) {
 			face_name = paren_face;
+			plain = false;
+		}
 		term_apply_face (in_highlight ? FACE_REGION : face_name);
+		while (k < nspans && spans[k].end <= i)
+			k++;
+		if (k < nspans && i >= spans[k].start)
+			term_mark_link (plain && !in_highlight);
 
 		if (col < startcol) {
 			/* A character straddling the start column. */
@@ -186,6 +198,7 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 		i += char_len;
 	}
 	free (syntax_faces);
+	free (spans);
 
 	/* Draw end-of-line indicator or padding. */
 	if (x >= ew && i < line_len) {
@@ -459,6 +472,7 @@ draw_text (Window *wp, size_t topline, size_t leftcol, const Region *r)
 	size_t text_w = gutter_width < wp->ewidth ? wp->ewidth - gutter_width : 0;
 
 	size_t cur_tab_width = buffer_tab_width (bp);
+	bool links = (bp->compilation != NULL || bp->shell != NULL) && references_followable (bp);
 	for (i = topline; i < wp->eheight + topline; ++i) {
 		term_move (i, leftcol);
 
@@ -487,7 +501,7 @@ draw_text (Window *wp, size_t topline, size_t leftcol, const Region *r)
 		}
 
 		draw_line (i, leftcol, wp->start_column, wp, o, r, r != NULL,
-			   cur_tab_width, gutter_str, gutter_width, gutter_face_name);
+			   cur_tab_width, gutter_str, gutter_width, gutter_face_name, links);
 
 		if (wp->start_column > 0) {
 			term_move (i, leftcol + gutter_width);

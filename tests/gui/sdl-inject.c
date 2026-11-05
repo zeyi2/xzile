@@ -28,8 +28,16 @@
  *   edit [STRING]     SDL_TEXTEDITING; empty when a composition ends
  *   press ROW COL     SDL_MOUSEBUTTONDOWN of the left button on a cell
  *   drag ROW COL      SDL_MOUSEMOTION there with the left button down
+ *   move ROW COL      SDL_MOUSEMOTION there with no button down
  *   release ROW COL   SDL_MOUSEBUTTONUP of the left button
  *   click ROW COL     press then release
+ *   leave             SDL_WINDOWEVENT_LEAVE: the pointer left the window
+ *   cursor NAME       check that the mouse pointer shown is the system
+ *                     cursor NAME: arrow, ibeam, hand, sizens or sizewe
+ *   sample NAME ROW COL  note how the cell looks in the last frame shown
+ *   same NAME NAME    check that two cells noted looked the same
+ *   differ NAME NAME  check that they did not
+ * A failed check is reported, and makes the editor exit with status 1.
  * MODS is a comma-separated list of ctrl, shift, alt, ralt, gui, mode.
  * ROW and COL count cells from 0 at the top left of the frame, or from
  * the cursor's cell when written `.', `.+N' or `.-N'. The cell size and
@@ -44,6 +52,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <SDL.h>
 
 /* The frame's padding, in pixels at a scale of 1 (as with the dummy
@@ -56,6 +65,61 @@ static Uint32 resume_at;
 static SDL_Rect cursor = { PAD, PAD, 8, 16 };
 static SDL_Event pending;	/* The release of a click. */
 static int have_pending;
+static int failures;
+
+static SDL_Renderer *renderer;
+static Uint32 *frame;		/* The last frame presented, in ARGB8888. */
+static int frame_w, frame_h;
+
+/* The system cursors made, standing in for those that the video driver
+   cannot make (as the dummy one cannot), so that the pointer shown can
+   still be checked. */
+static struct { SDL_Cursor *cursor; SDL_SystemCursor id; } cursors[SDL_NUM_SYSTEM_CURSORS];
+static char stand_ins[SDL_NUM_SYSTEM_CURSORS];
+static int ncursors;
+static int shown_cursor = -1;	/* The SDL_SystemCursor shown, or -1. */
+
+static struct { char name[32]; Uint32 hash; } samples[64];
+static int nsamples;
+
+static void
+check (int ok, const char *cmd, const char *arg)
+{
+	if (!ok) {
+		fprintf (stderr, "sdl-inject: failed: %s %s\n", cmd, arg != NULL ? arg : "");
+		failures++;
+	}
+}
+
+__attribute__ ((destructor)) static void
+report (void)
+{
+	if (failures > 0)
+		_exit (1);
+}
+
+static int
+cursor_named (const char *name)
+{
+	static const struct { const char *name; SDL_SystemCursor id; } names[] = {
+		{ "arrow", SDL_SYSTEM_CURSOR_ARROW }, { "ibeam", SDL_SYSTEM_CURSOR_IBEAM },
+		{ "hand", SDL_SYSTEM_CURSOR_HAND }, { "sizens", SDL_SYSTEM_CURSOR_SIZENS },
+		{ "sizewe", SDL_SYSTEM_CURSOR_SIZEWE },
+	};
+	for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+		if (name != NULL && strcmp (name, names[i].name) == 0)
+			return (int) names[i].id;
+	return -2;
+}
+
+static Uint32 *
+sample_named (const char *name)
+{
+	for (int i = 0; i < nsamples; i++)
+		if (name != NULL && strcmp (samples[i].name, name) == 0)
+			return &samples[i].hash;
+	return NULL;
+}
 
 static Uint16
 parse_mods (char *s)
@@ -94,6 +158,26 @@ cell_pixel (const char *s, int at, int size)
 	return origin + atoi (s) * size + size / 2;
 }
 
+/* FNV-1a of the pixels of the cell at `arg' ("ROW COL") in the last
+   frame presented. */
+static Uint32
+cell_hash (char *arg)
+{
+	char *col = arg != NULL ? strchr (arg, ' ') : NULL;
+	if (col != NULL)
+		*col++ = '\0';
+	int x0 = cell_pixel (col, cursor.x, cursor.w) - cursor.w / 2;
+	int y0 = cell_pixel (arg, cursor.y, cursor.h) - cursor.h / 2;
+	Uint32 h = 2166136261u;
+	for (int y = y0; y < y0 + cursor.h; y++)
+		for (int x = x0; x < x0 + cursor.w; x++) {
+			Uint32 p = frame != NULL && x >= 0 && y >= 0 && x < frame_w && y < frame_h ?
+				frame[y * frame_w + x] : 0;
+			h = (h ^ p) * 16777619u;
+		}
+	return h;
+}
+
 static void
 mouse_event (SDL_Event *ev, const char *cmd, char *arg)
 {
@@ -101,9 +185,9 @@ mouse_event (SDL_Event *ev, const char *cmd, char *arg)
 	if (col != NULL)
 		*col++ = '\0';
 	int x = cell_pixel (col, cursor.x, cursor.w), y = cell_pixel (arg, cursor.y, cursor.h);
-	if (strcmp (cmd, "drag") == 0) {
+	if (strcmp (cmd, "drag") == 0 || strcmp (cmd, "move") == 0) {
 		ev->type = SDL_MOUSEMOTION;
-		ev->motion.state = SDL_BUTTON_LMASK;
+		ev->motion.state = cmd[0] == 'd' ? SDL_BUTTON_LMASK : 0;
 		ev->motion.x = x;
 		ev->motion.y = y;
 		return;
@@ -177,8 +261,32 @@ next_event (SDL_Event *ev)
 			snprintf (ev->edit.text, sizeof ev->edit.text, "%s", arg != NULL ? arg : "");
 			ev->edit.start = ev->edit.length = (Sint32) SDL_utf8strlen (ev->edit.text);
 		} else if (strcmp (line, "press") == 0 || strcmp (line, "drag") == 0 ||
-			   strcmp (line, "release") == 0 || strcmp (line, "click") == 0) {
+			   strcmp (line, "move") == 0 || strcmp (line, "release") == 0 ||
+			   strcmp (line, "click") == 0) {
 			mouse_event (ev, line, arg);
+		} else if (strcmp (line, "leave") == 0) {
+			ev->type = SDL_WINDOWEVENT;
+			ev->window.event = SDL_WINDOWEVENT_LEAVE;
+		} else if (strcmp (line, "cursor") == 0) {
+			check (shown_cursor == cursor_named (arg), line, arg);
+			continue;
+		} else if (strcmp (line, "sample") == 0) {
+			char *cell = arg != NULL ? strchr (arg, ' ') : NULL;
+			if (cell == NULL || nsamples == (int) (sizeof samples / sizeof samples[0])) {
+				check (0, line, arg);
+				continue;
+			}
+			*cell++ = '\0';
+			snprintf (samples[nsamples].name, sizeof samples[nsamples].name, "%s", arg);
+			samples[nsamples++].hash = cell_hash (cell);
+			continue;
+		} else if (strcmp (line, "same") == 0 || strcmp (line, "differ") == 0) {
+			char *b = arg != NULL ? strchr (arg, ' ') : NULL;
+			if (b != NULL)
+				*b++ = '\0';
+			Uint32 *ha = sample_named (arg), *hb = sample_named (b);
+			check (ha != NULL && hb != NULL && (*ha == *hb) == (line[0] == 's'), line, arg);
+			continue;
 		} else {
 			fprintf (stderr, "sdl-inject: unknown command `%s'\n", line);
 			continue;
@@ -220,4 +328,72 @@ SDL_WaitEventTimeout (SDL_Event *ev, int timeout)
 	if (!finished && (timeout < 0 || timeout > 5))
 		timeout = 5;
 	return real (ev, timeout);
+}
+
+SDL_Renderer *
+SDL_CreateRenderer (SDL_Window *window, int index, Uint32 flags)
+{
+	static SDL_Renderer *(*real) (SDL_Window *, int, Uint32);
+	if (real == NULL)
+		real = (SDL_Renderer *(*) (SDL_Window *, int, Uint32)) dlsym (RTLD_NEXT, "SDL_CreateRenderer");
+	SDL_Renderer *r = real (window, index, flags);
+	if (r != NULL)
+		renderer = r;
+	return r;
+}
+
+/* Keep each frame, for sample. */
+void
+SDL_RenderPresent (SDL_Renderer *r)
+{
+	static void (*real) (SDL_Renderer *);
+	if (real == NULL)
+		real = (void (*) (SDL_Renderer *)) dlsym (RTLD_NEXT, "SDL_RenderPresent");
+	int w, h;
+	if (r == renderer && SDL_GetRendererOutputSize (r, &w, &h) == 0 && w > 0 && h > 0) {
+		if (w != frame_w || h != frame_h) {
+			free (frame);
+			frame = malloc ((size_t) w * (size_t) h * sizeof *frame);
+			frame_w = frame != NULL ? w : 0;
+			frame_h = frame != NULL ? h : 0;
+		}
+		if (frame != NULL)
+			SDL_RenderReadPixels (r, NULL, SDL_PIXELFORMAT_ARGB8888, frame, w * (int) sizeof *frame);
+	}
+	real (r);
+}
+
+SDL_Cursor *
+SDL_CreateSystemCursor (SDL_SystemCursor id)
+{
+	static SDL_Cursor *(*real) (SDL_SystemCursor);
+	if (real == NULL)
+		real = (SDL_Cursor *(*) (SDL_SystemCursor)) dlsym (RTLD_NEXT, "SDL_CreateSystemCursor");
+	SDL_Cursor *c = real (id);
+	if (c == NULL && id >= 0 && id < SDL_NUM_SYSTEM_CURSORS)
+		c = (SDL_Cursor *) &stand_ins[id];
+	if (ncursors < SDL_NUM_SYSTEM_CURSORS) {
+		cursors[ncursors].cursor = c;
+		cursors[ncursors++].id = id;
+	}
+	return c;
+}
+
+void
+SDL_SetCursor (SDL_Cursor *c)
+{
+	static void (*real) (SDL_Cursor *);
+	if (real == NULL)
+		real = (void (*) (SDL_Cursor *)) dlsym (RTLD_NEXT, "SDL_SetCursor");
+	if (c != NULL) {
+		shown_cursor = -1;
+		for (int i = 0; i < ncursors; i++)
+			if (cursors[i].cursor == c)
+				shown_cursor = (int) cursors[i].id;
+	}
+	int stand_in = 0;
+	for (int i = 0; i < SDL_NUM_SYSTEM_CURSORS; i++)
+		stand_in |= c == (SDL_Cursor *) &stand_ins[i];
+	if (!stand_in)
+		real (c);
 }

@@ -575,6 +575,51 @@ cell_colors (const Attr *a, Rgb *fg, Rgb *bg)
 		*fg = rgb_mix (*fg, *bg, 55);
 }
 
+/* Show `face' over what has colours `*fg' and `*bg' and attributes
+   `*a'. Its colours count only where they are not the default face's,
+   which every face inherits. */
+static void
+apply_face_over (const char *face, Attr *a, Rgb *fg, Rgb *bg)
+{
+	TerminalStyle st, dflt;
+	if (!resolve_terminal_style (face, &st))
+		return;
+	bool have_dflt = resolve_terminal_style (FACE_DEFAULT, &dflt);
+	if (st.reverse) {
+		Rgb t = *fg;
+		*fg = *bg;
+		*bg = t;
+	}
+	if (st.has_foreground && !(have_dflt && dflt.has_foreground && dflt.foreground == st.foreground))
+		*fg = color_rgb (st.foreground, *fg);
+	if (st.has_background && !(have_dflt && dflt.has_background && dflt.background == st.background))
+		*bg = color_rgb (st.background, *bg);
+	if (st.underline)
+		a->flags |= ATTR_UNDERLINE;
+	if (st.bold)
+		a->flags |= ATTR_BOLD;
+}
+
+/* The link under the pointer, if `hovering': it is shown in the
+   link-hover face, with its hint beside it in the tooltip face. */
+static bool hovering;
+static ScreenLink hover;
+
+static bool
+hovered (size_t y, size_t x)
+{
+	return hovering && y == hover.y && x >= hover.x0 && x < hover.x1;
+}
+
+/* The colours and attributes of the cell at `y', `x'. */
+static void
+shown_colors (size_t y, size_t x, Attr *a, Rgb *fg, Rgb *bg)
+{
+	*a = phys[y * phys_cols + x].attr;
+	cell_colors (a, fg, bg);
+	if (hovered (y, x))
+		apply_face_over (FACE_LINK_HOVER, a, fg, bg);
+}
 
 /*--------------------------------------------------------------------------
  * Painting.
@@ -651,6 +696,99 @@ draw_decorations (const Attr *a, int x, int y, int width, Rgb fg)
 		fill (x, y + text_y + ascent * 2 / 3, width * cell_w, t);
 }
 
+/* The columns that the `len' bytes of `s' take. */
+static size_t
+text_columns (const char *s, size_t len)
+{
+	size_t cols = 0;
+	for (size_t i = 0; i < len;) {
+		size_t n;
+		int w = utf8_char_display_width (utf8_decode (s, len, i, &n));
+		cols += w > 0 ? (size_t) w : 0;
+		i += n > 0 ? n : 1;
+	}
+	return cols;
+}
+
+/* Where the hint of the hovered link goes, in pixels: below the link,
+   or above it if there is no room there, but never over the minibuffer
+   line. Returns "below" or "above", or NULL if it fits neither. */
+static const char *
+tooltip_rect (SDL_Rect *r)
+{
+	size_t lines = 0, cols = 0;
+	for (const char *p = hover.hint;; p++) {
+		const char *e = strchr (p, '\n');
+		size_t n = e != NULL ? (size_t) (e - p) : strlen (p);
+		cols = MAX (cols, text_columns (p, n));
+		lines++;
+		if (e == NULL)
+			break;
+		p = e;
+	}
+	int gap = 2 * line_px ();
+	r->w = MIN ((int) cols * cell_w + 2 * cell_w, out_w);
+	r->h = (int) lines * cell_h + cell_h / 2;
+	int top = pad + (int) hover.y * cell_h, bottom = top + cell_h;
+	int limit = pad + (int) (phys_rows - 1) * cell_h;
+	/* The text lines up with the link's. */
+	r->x = MAX (0, MIN (pad + (int) hover.x0 * cell_w - cell_w, out_w - r->w));
+	if (bottom + gap + r->h <= limit) {
+		r->y = bottom + gap;
+		return "below";
+	}
+	if (top - gap - r->h >= 0) {
+		r->y = top - gap - r->h;
+		return "above";
+	}
+	return NULL;
+}
+
+static void
+draw_tooltip (void)
+{
+	SDL_Rect r;
+	if (!hovering || hover.y + 1 >= phys_rows || tooltip_rect (&r) == NULL)
+		return;
+	Attr a = { TERM_COLOR_DEFAULT, TERM_COLOR_DEFAULT, 0 };
+	Rgb fg = default_fg, bg = default_bg;
+	apply_face_over (FACE_TOOLTIP, &a, &fg, &bg);
+	set_color (bg, 255);
+	fill (r.x, r.y, r.w, r.h);
+	set_color (rgb_mix (fg, bg, 30), 255);
+	for (int i = 0; i < line_px (); i++) {
+		SDL_Rect b = { r.x + i, r.y + i, r.w - 2 * i, r.h - 2 * i };
+		SDL_RenderDrawRect (renderer, &b);
+	}
+
+	SDL_RenderSetClipRect (renderer, &r);
+	Cell c;
+	c.attr = a;
+	int py = r.y + cell_h / 4;
+	for (const char *p = hover.hint;; p++, py += cell_h) {
+		const char *e = strchr (p, '\n');
+		size_t n = e != NULL ? (size_t) (e - p) : strlen (p);
+		int px = r.x + cell_w;
+		for (size_t i = 0; i < n;) {
+			size_t len;
+			int w = utf8_char_display_width (utf8_decode (p, n, i, &len));
+			len = MAX (len, 1);
+			if (w > 0) {
+				size_t k = MIN (len, sizeof c.ch - 1);
+				memcpy (c.ch, p + i, k);
+				c.ch[k] = '\0';
+				draw_text (&c, px, py, w, fg);
+				px += w * cell_w;
+			}
+			i += len;
+		}
+		if (e == NULL)
+			break;
+		p = e;
+	}
+	SDL_RenderSetClipRect (renderer, NULL);
+}
+
 static size_t
 cell_width (size_t y, size_t x)
 {
@@ -677,10 +815,11 @@ render (void)
 		bool extend = !rgb_eq (first, default_bg) && !rgb_eq (last, default_bg);
 		for (size_t x = 0; x < phys_cols;) {
 			Rgb bg;
-			cell_colors (&row[x].attr, &fg, &bg);
+			Attr a;
+			shown_colors (y, x, &a, &fg, &bg);
 			size_t end = x + 1;
 			for (Rgb next; end < phys_cols; end++) {
-				cell_colors (&row[end].attr, &fg, &next);
+				shown_colors (y, end, &a, &fg, &next);
 				if (!rgb_eq (next, bg))
 					break;
 			}
@@ -707,11 +846,12 @@ render (void)
 			if (c->ch[0] == '\0')
 				continue;
 			Rgb fg, bg;
-			cell_colors (&c->attr, &fg, &bg);
+			Attr a;
+			shown_colors (y, x, &a, &fg, &bg);
 			int px = pad + (int) x * cell_w, py = pad + (int) y * cell_h;
 			size_t w = cell_width (y, x);
 			draw_text (c, px, py, (int) w, fg);
-			draw_decorations (&c->attr, px, py, (int) w, fg);
+			draw_decorations (&a, px, py, (int) w, fg);
 		}
 
 	/* The cursor: a block over the character, or an outline when the
@@ -724,7 +864,8 @@ render (void)
 		if (focused) {
 			fill (px, py, (int) w * cell_w, cell_h);
 			Rgb fg, bg;
-			cell_colors (&c->attr, &fg, &bg);
+			Attr a;
+			shown_colors (phys_y, phys_x, &a, &fg, &bg);
 			draw_text (c, px, py, (int) w, rgb_eq (bg, cursor_rgb) ? default_bg : bg);
 		} else {
 			int t = line_px ();
@@ -738,6 +879,8 @@ render (void)
 		SDL_Rect ime = { (int) (px / scale), (int) (py / scale), (int) (cell_w / scale), (int) (cell_h / scale) };
 		SDL_SetTextInputRect (&ime);
 	}
+
+	draw_tooltip ();
 
 	if (bell_until != 0) {
 		SDL_SetRenderDrawBlendMode (renderer, SDL_BLENDMODE_BLEND);
@@ -777,11 +920,15 @@ grid_size (size_t *rows, size_t *cols)
 	*rows = (size_t) MAX ((out_h - 2 * pad) / cell_h, 3);
 }
 
+static void point_at (bool moved, size_t y, size_t x);
+static void revalidate_hover (void);
+
 /* Fit the grid to the window, after a resize or a change of font. */
 static void
 apply_resize (void)
 {
 	pending_resize = false;
+	point_at (false, 0, 0);
 	float old_scale = scale;
 	update_scale ();
 	if (scale != old_scale)
@@ -855,8 +1002,9 @@ chld_handler (int signo)
 	}
 }
 
-/* Mouse pointers: over text, and over dividers between windows. */
-static SDL_Cursor *cursor_ibeam, *cursor_rows, *cursor_cols, *cursor_arrow, *cursor_shown;
+/* Mouse pointers: over text, over dividers between windows, and over
+   links. */
+static SDL_Cursor *cursor_ibeam, *cursor_rows, *cursor_cols, *cursor_arrow, *cursor_hand, *cursor_shown;
 
 static void
 show_cursor (SDL_Cursor *c)
@@ -954,6 +1102,7 @@ term_init (void)
 	cursor_rows = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZENS);
 	cursor_cols = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_SIZEWE);
 	cursor_arrow = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_ARROW);
+	cursor_hand = SDL_CreateSystemCursor (SDL_SYSTEM_CURSOR_HAND);
 	show_cursor (cursor_ibeam);
 	SDL_StartTextInput ();
 	update_theme_colors ();
@@ -1047,6 +1196,7 @@ term_refresh (void)
 	phys_y = scr_y;
 	phys_x = scr_x;
 	phys_cursor_visible = scr_cursor_visible;
+	revalidate_hover ();
 
 	if (cur_bp != NULL) {
 		char *t = xasprintf ("%s \xe2\x80\x94 %s", cur_bp->name, PACKAGE_NAME);
@@ -1331,6 +1481,84 @@ static bool preview_drag;
 static size_t preview_drag_y, preview_drag_x;	/* The cell it began in. */
 static int preview_drag_px, preview_drag_py;	/* The last position. */
 
+/* The cell that the pointer last moved over with no button down. Only
+   while `pointer_moved', when the pointer has moved over the window
+   since the last key, click, or resize, and has not left it, is a link
+   under it hovered. */
+static bool pointer_moved;
+static size_t pointer_y, pointer_x;
+
+/* Find the link under the pointer again, without changing anything
+   else; returns whether it changed. */
+static bool
+update_hover (void)
+{
+	ScreenLink l = { 0, 0, 0, NULL };
+	bool now = pointer_moved && focused && !mouse_down && shell_button == 0 && drag_split == NULL &&
+		!preview_drag && pointer_y + 1 < phys_rows && link_at (pointer_y, pointer_x, &l);
+	bool changed = now != hovering || (now && (l.y != hover.y || l.x0 != hover.x0 || l.x1 != hover.x1 ||
+						     strcmp (l.hint, hover.hint) != 0));
+	if (hovering)
+		free (hover.hint);
+	hovering = now;
+	hover = l;
+	if (changed && debug_enabled ("hover")) {
+		if (hovering) {
+			SDL_Rect r;
+			const char *where = tooltip_rect (&r);
+			StrBuf shown;
+			sb_init (&shown);
+			for (size_t x = hover.x0; x < hover.x1 && x < phys_cols; x++)
+				sb_add (&shown, phys[hover.y * phys_cols + x].ch);
+			char *hint = xstrdup (hover.hint);
+			for (char *p = hint; (p = strchr (p, '\n')) != NULL;)
+				*p = '|';
+			debug_log ("hover", "row %zu, columns %zu-%zu \"%s\", hint %s: %s", hover.y, hover.x0,
+				   hover.x1, shown.s != NULL ? shown.s : "", where != NULL ? where : "hidden", hint);
+			sb_free (&shown);
+			free (hint);
+		} else
+			debug_log ("hover", "none");
+	}
+	return changed;
+}
+
+/* Show the hand pointer just while a link is hovered: once none is,
+   the pointer that the cell it was last over takes. */
+static void
+show_hand (void)
+{
+	if (hovering)
+		show_cursor (cursor_hand);
+	else if (cursor_shown == cursor_hand)
+		show_cursor (pointer_at (pointer_y, pointer_x));
+}
+
+/* Show the link under the pointer, at `y', `x' if `moved', or else
+   none, until the pointer moves again. */
+static void
+point_at (bool moved, size_t y, size_t x)
+{
+	pointer_moved = moved;
+	if (moved) {
+		pointer_y = y;
+		pointer_x = x;
+	}
+	if (update_hover ())
+		render ();
+	show_hand ();
+}
+
+/* After a repaint, the link under the pointer may have moved, gone or
+   changed, as when output arrived, the window scrolled or showed
+   another buffer, or the theme changed. */
+static void
+revalidate_hover (void)
+{
+	update_hover ();
+	show_hand ();
+}
+
 /* A pointer position, in pixels from the top left of the text grid. */
 static void
 grid_pixels (int wx, int wy, double *px, double *py)
@@ -1415,20 +1643,24 @@ handle_event (const SDL_Event *ev)
 		push_keys ("\\C-x\\C-c");
 		break;
 	case SDL_KEYDOWN:
+		point_at (false, 0, 0);
 		key_down (&ev->key);
 		break;
 	case SDL_TEXTEDITING:
+		point_at (false, 0, 0);
 		/* A dead key after a key taken as Meta starts no composition
 		   of ours. */
 		if (!key_handled)
 			composing = ev->edit.text[0] != '\0';
 		break;
 	case SDL_TEXTINPUT:
+		point_at (false, 0, 0);
 		composing = false;
 		if (!key_handled)
 			push_text (ev->text.text);
 		break;
 	case SDL_MOUSEBUTTONDOWN:
+		point_at (false, 0, 0);
 		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
 			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
@@ -1505,8 +1737,12 @@ handle_event (const SDL_Event *ev)
 				redisplay_after_output ();
 			break;
 		}
+		if (ev->motion.state == 0 && (!pointer_moved || y != pointer_y || x != pointer_x))
+			point_at (true, y, x);
+		else if (ev->motion.state != 0 && pointer_moved)
+			point_at (false, y, x);
 		if (!mouse_down)
-			show_cursor (pointer_at (y, x));
+			show_cursor (hovering ? cursor_hand : pointer_at (y, x));
 		Keystroke drag = KBD_NOKEY;
 		if (mouse_down && (ev->motion.state & SDL_BUTTON_LMASK))
 			drag = KBD_DRAG_MOUSE_1;
@@ -1573,9 +1809,14 @@ handle_event (const SDL_Event *ev)
 			focused = ev->window.event == SDL_WINDOWEVENT_FOCUS_GAINED;
 			/* Input methods end or forget their composition then. */
 			composing = false;
-			if (!focused)
+			if (!focused) {
 				drag_end ();
+				point_at (false, 0, 0);
+			}
 			render ();
+			break;
+		case SDL_WINDOWEVENT_LEAVE:
+			point_at (false, 0, 0);
 			break;
 		case SDL_WINDOWEVENT_EXPOSED:
 			render ();

@@ -349,6 +349,9 @@ void term_addnstr (const char *s, size_t n);
 void term_attrset (size_t attr);
 void term_apply_style (const TerminalStyle *style);
 void term_apply_face (const char *face_name);
+/* Show what is drawn next as a link, in the `link' face: underlined,
+   and in its colour if `plain', having no colour of its own. */
+void term_mark_link (bool plain);
 void term_beep (void);
 size_t term_width (void);
 size_t term_height (void);
@@ -607,6 +610,7 @@ struct Buffer {
 	Undo *next_undop;	/* Next undo delta to apply. */
 	Map *vars;		/* Buffer-local variables. */
 	bool modified;		/* Modified flag. */
+	size_t changes;		/* How many times the text has changed. */
 	bool nosave;		/* The buffer need not be saved. */
 	bool needname;		/* On save, ask for a file name. */
 	bool temporary;		/* The buffer is a temporary buffer. */
@@ -803,6 +807,28 @@ void wm_delete (Window *wp);
 void create_scratch_window (void);
 Window *popup_window (void);
 Window *window_for_link (Window *from, const Buffer *bp);
+
+/* A link in a line of text: bytes [start, end) from its start. */
+typedef struct {
+	size_t start, end;
+} LinkSpan;
+
+/* What a click on a link does: visit a file in another window (see
+   window_for_link), list a directory in the same window, or either, as
+   a remote name turns out to be. */
+enum LinkKind { LINK_FILE, LINK_DIR, LINK_FILE_OR_DIR };
+
+/* A link on the screen: row `y', columns [x0, x1). `hint' (to free)
+   says, in lines, where it goes and what a click on it does. */
+typedef struct {
+	size_t y, x0, x1;
+	char *hint;
+} ScreenLink;
+
+/* The link that a click on screen cell `y', `x' would follow, found
+   without changing anything; false if there is none, or if the mouse
+   goes to a program or the minibuffer is being read. */
+bool link_at (size_t y, size_t x, ScreenLink *link);
 Window *window_showing (const Buffer *bp);
 void window_show_buffer (Window *wp, Buffer *bp, size_t o);
 void window_init (void);
@@ -1087,6 +1113,10 @@ bool shell_mouse_at (size_t y, size_t x);
    program reads the mouse; returns false otherwise. */
 bool shell_mouse (Keystroke key);
 bool shell_follow_link (Window *wp, size_t y, size_t x);
+/* The reference that shell_follow_link would follow, as columns
+   [*x0, *x1) of row `y' of the terminal in `wp', and what it names in
+   `*target' (to free); false if there is none. */
+bool shell_link_at (Window *wp, size_t y, size_t x, size_t *x0, size_t *x1, char **target);
 void shell_free (Buffer *bp);
 const char *shell_directory (const Buffer *bp);
 char *shell_elsewhere (const Buffer *bp);
@@ -1103,6 +1133,24 @@ bool compilation_process_alive (const Buffer *bp);
 bool follow_reference (Window *wp, const char *s, size_t len, size_t i, size_t lo);
 /* Likewise, at offset `o' of the buffer of `wp'. */
 bool follow_reference_at (Window *wp, size_t o);
+/* Whether a click on a reference in `bp' may follow it: `bp' is a
+   compilation buffer, or a terminal whose program is not on another
+   machine (see shell_elsewhere). */
+bool references_followable (const Buffer *bp);
+/* The references that a click would follow in the line `s' (`len'
+   bytes) of `bp', at offset `lo' or NOPOS as for follow_reference,
+   sorted and apart in `*spans' (to free); returns how many there are.
+   A local file must exist; a remote one is not looked for. */
+size_t reference_links (Buffer *bp, const char *s, size_t len, size_t lo, LinkSpan **spans);
+/* Likewise for the line at offset `lo' of `bp'. */
+size_t reference_line_links (Buffer *bp, size_t lo, LinkSpan **spans);
+/* The reference that a click on byte `i' of `s' would follow, as for
+   reference_links, in `*span', with the place it names in `*target'
+   (to free); false if there is none. */
+bool reference_link_at (Buffer *bp, const char *s, size_t len, size_t i, size_t lo, LinkSpan *span,
+			char **target);
+/* Likewise at byte `i' of the line at offset `lo' of `bp'. */
+bool reference_line_link_at (Buffer *bp, size_t lo, size_t i, LinkSpan *span, char **target);
 void compile_init (void);
 
 /* magit.c */
@@ -1116,6 +1164,10 @@ bool dired (const char *dir);
 bool dired_remote (Remote *r, const char *dir);
 const char *dired_directory (const Buffer *bp);
 bool dired_follow_link (size_t o);
+/* The name that dired_follow_link would follow at byte `i' of the line
+   at offset `lo' of `bp', with its file in `*target' (to free) and
+   what a click does in `*kind'; false if there is none. */
+bool dired_link_at (Buffer *bp, size_t lo, size_t i, LinkSpan *span, char **target, enum LinkKind *kind);
 void dired_free (Buffer *bp);
 void dired_init (void);
 
@@ -1284,6 +1336,9 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_SHOW_PAREN_MATCH "show-paren-match"
 #define FACE_SHOW_PAREN_MISMATCH "show-paren-mismatch"
 #define FACE_CURSOR "cursor"
+#define FACE_LINK "link"
+#define FACE_LINK_HOVER "link-hover"
+#define FACE_TOOLTIP "tooltip"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */

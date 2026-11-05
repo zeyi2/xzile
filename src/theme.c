@@ -103,6 +103,9 @@ static const char *const builtin_faces[] = {
 	FACE_SHOW_PAREN_MATCH,
 	FACE_SHOW_PAREN_MISMATCH,
 	FACE_CURSOR,
+	FACE_LINK,
+	FACE_LINK_HOVER,
+	FACE_TOOLTIP,
 };
 
 static bool
@@ -201,6 +204,17 @@ merge_face_spec (ResolvedFace *resolved, const FaceSpec *face)
 		resolved->reverse = face->reverse;
 }
 
+/* How the faces of links look in a theme that leaves them out, which
+   the default face alone would not show. */
+static void
+merge_link_fallback (ResolvedFace *resolved, const char *face_name)
+{
+	if (strcmp (face_name, FACE_LINK) == 0 || strcmp (face_name, FACE_LINK_HOVER) == 0)
+		resolved->underline = true;
+	if (strcmp (face_name, FACE_LINK_HOVER) == 0 || strcmp (face_name, FACE_TOOLTIP) == 0)
+		resolved->reverse = true;
+}
+
 static bool
 resolve_face_into (const Theme *theme, const char *face_name, const char **seen,
 		   size_t depth, ResolvedFace *resolved)
@@ -225,6 +239,8 @@ resolve_face_into (const Theme *theme, const char *face_name, const char **seen,
 
 	if (face != NULL)
 		merge_face_spec (resolved, face);
+	else
+		merge_link_fallback (resolved, face_name);
 
 	return true;
 }
@@ -566,6 +582,9 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "brightwhite", "magenta", NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "brightwhite", "red", NULL, T, U, U);
+	set_builtin_face (t, FACE_LINK, "cyan", NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_LINK_HOVER, NULL, "brightblack", NULL, U, T, U);
+	set_builtin_face (t, FACE_TOOLTIP, "brightwhite", "brightblack", NULL, U, U, U);
 }
 
 static void
@@ -613,6 +632,9 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_PICKER_GROUP, "magenta", NULL, NULL, T, T, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "white", "magenta", NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "white", "red", NULL, T, U, U);
+	set_builtin_face (t, FACE_LINK, "blue", NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_LINK_HOVER, NULL, "cyan", NULL, U, T, U);
+	set_builtin_face (t, FACE_TOOLTIP, "black", "yellow", NULL, U, U, U);
 }
 
 static void
@@ -660,6 +682,9 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_PICKER_GROUP, NULL, NULL, NULL, T, T, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, NULL, NULL, NULL, T, T, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, NULL, NULL, NULL, T, U, T);
+	set_builtin_face (t, FACE_LINK, NULL, NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_LINK_HOVER, NULL, NULL, NULL, U, T, T);
+	set_builtin_face (t, FACE_TOOLTIP, NULL, NULL, NULL, U, U, T);
 }
 
 /* Themes in hex colours for truecolor displays such as the GUI; other
@@ -710,6 +735,9 @@ define_xzile_dark_theme (void)
 	set_builtin_face (t, FACE_PICKER_GROUP, "#c099ff", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "#ffffff", "#3e5687", NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "#ffffff", "#c53b53", NULL, T, U, U);
+	set_builtin_face (t, FACE_LINK, "#82aaff", NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#2a3142", NULL, U, T, U);
+	set_builtin_face (t, FACE_TOOLTIP, "#e3e7ee", "#2b303b", NULL, U, U, U);
 }
 
 static void
@@ -758,6 +786,9 @@ define_xzile_light_theme (void)
 	set_builtin_face (t, FACE_PICKER_GROUP, "#a626a4", NULL, NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MATCH, "#2b2d33", "#c9d8fb", NULL, T, U, U);
 	set_builtin_face (t, FACE_SHOW_PAREN_MISMATCH, "#ffffff", "#d6304b", NULL, T, U, U);
+	set_builtin_face (t, FACE_LINK, "#3b6fe0", NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#e3e9f8", NULL, U, T, U);
+	set_builtin_face (t, FACE_TOOLTIP, "#2b2d33", "#eceef2", NULL, U, U, U);
 }
 
 static char *
