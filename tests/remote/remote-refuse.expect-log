@@ -1,7 +1,3 @@
-refused shell-command in refuse.txt
-refused shell-command-on-region in refuse.txt
-refused shell in refuse.txt
-refused term in refuse.txt
 refused compile in refuse.txt
 refused recompile in refuse.txt
 refused magit-status in refuse.txt

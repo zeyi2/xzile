@@ -1082,6 +1082,7 @@ bool shell_mouse_at (size_t y, size_t x);
    program reads the mouse; returns false otherwise. */
 bool shell_mouse (Keystroke key);
 void shell_free (Buffer *bp);
+const char *shell_directory (const Buffer *bp);
 void terminal_init (void);
 
 /* compile.c */
@@ -1134,6 +1135,11 @@ bool remote_list (Remote *r, const char *dir, bool details, RemoteEntry **out, s
 void remote_entries_free (RemoteEntry *v, size_t n);
 char *remote_describe (const Buffer *bp);
 char *remote_buffer_dir (const Buffer *bp);
+int remote_shell_command (Remote *r, const char *dir, const char *cmd, const char *input, size_t input_len,
+			  StrBuf *output);
+bool remote_terminal_check (Remote *r, const char *dir, char **adir, char **shell);
+const char **remote_terminal_argv (Remote *r, const char *dir, const char *program, StrVec *keep);
+bool remote_same_host (const Remote *r, const char *host);
 bool remote_refuse (const Buffer *bp, const char *what);
 void remote_shutdown (void);
 void locations_load (void);

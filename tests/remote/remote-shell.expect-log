@@ -1,0 +1,8 @@
+Starting a terminal on xztest
+terminal on xztest in
+: login shell
+*shell ssh:xztest*: ignored OSC 7 for host elsewhere.invalid
+/home/t/sub
+refused compile in *shell ssh:xztest*
+refused magit-status in *shell ssh:xztest*
+Listing

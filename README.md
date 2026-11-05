@@ -183,9 +183,44 @@ files, and Dired for browsing (`RET`, `o`, `v`, `^`, `g`, marks).
 Saving writes only if the file is unchanged since it was read or
 saved, otherwise it asks; the buffer stays modified unless the remote
 side confirms what it wrote. Dired's `R` `C` `D` `x` `M` `+`, and
-shell, term, compile, Magit, shell commands and previews are refused
-in remote buffers rather than run locally, and a remote failure never
-falls back to a local file.
+compile, Magit, `cd`, `write-file` and previews are refused in
+remote buffers rather than run locally, and a remote failure never
+falls back to a local file or program.
+
+Shells and shell commands started from a remote buffer (a file, a
+Dired listing or a terminal there) run on its machine, in its
+directory there. `M-!` (`shell-command`) and `M-|`
+(`shell-command-on-region`) run the command with `sh`, with the
+region as standard input, and show or insert its output and errors as
+for a local command. `C-g` cancels them and `remote-timeout` bounds
+them: XZile stops waiting, and tries to stop the command on the remote
+machine by sending SIGTERM to its process group there. This is best
+effort. It needs `ps` on the remote machine to find the group, and a
+working connection to send the signal; a command can also ignore
+SIGTERM, or leave the group (as a daemon does), and go on running. A
+command that cannot be run in the directory or does not finish
+(cancelled, timed out, killed, or the connection lost) inserts nothing
+and leaves the region as it was.
+
+`M-x shell` runs the remote user's `$SHELL` as a login shell, and
+`M-x term` a program (by default that shell), on a remote
+pseudo-terminal (`ssh -tt`, through the shared connection): keys,
+`C-c`, `C-d` and window size changes reach the remote program, and
+`remote-timeout` does not limit the session. Remote shells have
+buffers of their own, named after the machine (`*shell ssh:host*`,
+`*shell ssh:host*<2>`, ..., `*terminal ssh:host*`): in a remote
+buffer, `M-x shell`, `C-u M-x shell` and `C-u N M-x shell` find or
+start shells on that machine only, and in a local buffer local ones.
+A remote terminal buffer keeps its machine and directory (shown as
+`ssh:host:dir` in the buffer list) without visiting a file, so
+`C-x C-f`, `C-x d` and shell commands started there use that machine.
+Its directory follows the shell's OSC 7 reports (`file://HOST/PATH`)
+as a remote path, when HOST is that machine: empty, `localhost`, the
+host name it was reached with, or its `uname -n`. Names are compared
+ignoring case, and a short name also matches that name with a domain
+(`host` and `host.example`, but not `host.example` and
+`host.example.other`). Reports for other hosts, such as those of a
+shell that ran `ssh` itself, are ignored.
 
 XZile runs the system `ssh` with `BatchMode=yes`: it never asks for a
 password or passphrase, and host keys are checked as your ssh

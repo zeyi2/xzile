@@ -30,7 +30,12 @@ M-l chooses a location: this machine, or another reached with
 a new host, user and port); the prompt names it.
 Remote text files can be visited, created, saved and reverted, and
 remote directories browsed in Dired; commands that would change files
-from Dired or run programs are refused in remote buffers.
+from Dired, compile or run Magit are refused in remote buffers.
+From a remote buffer, \fBshell-command\fR (M-!) and
+\fBshell-command-on-region\fR (M-|) run on its machine, in its
+directory there, and \fBshell\fR and \fBterm\fR run the remote
+\fB$SHELL\fR or a program on a remote pseudo-terminal, in buffers
+named after the machine (*shell ssh:host*).
 ssh runs with BatchMode=yes, so keys or an agent are needed and host
 keys are checked; \fBremote-timeout\fR bounds each operation, C-g
 cancels it, and \fBssh-config-file\fR chooses the ssh configuration.

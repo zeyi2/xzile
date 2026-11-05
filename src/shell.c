@@ -149,7 +149,19 @@ pipe_command (const char *cmd, const Estr *instr, bool do_insert, bool do_replac
 {
 	StrBuf output;
 	sb_init (&output);
-	if (!run_command (cmd, instr != NULL ? instr->text : NULL, instr != NULL ? strlen (instr->text) : 0, &output)) {
+	if (cur_bp->remote != NULL) {
+		/* On the buffer's machine, in its directory there. A command
+		   that cannot be run or does not finish changes nothing. */
+		char *dir = remote_buffer_dir (cur_bp);
+		int status = remote_shell_command (cur_bp->remote, dir, cmd, instr != NULL ? instr->text : NULL,
+						   instr != NULL ? instr->len : 0, &output);
+		free (dir);
+		if (status < 0) {
+			minibuf_error ("%s", remote_last_error ());
+			sb_free (&output);
+			return false;
+		}
+	} else if (!run_command (cmd, instr != NULL ? instr->text : NULL, instr != NULL ? strlen (instr->text) : 0, &output)) {
 		sb_free (&output);
 		return false;
 	}
@@ -202,8 +214,6 @@ static bool
 F_shell_command (long uniarg, Args *args)
 {
 	(void) uniarg;
-	if (remote_refuse (cur_bp, "shell-command"))
-		return false;
 	bool ok = true;
 	char *cmd = xstrdup_or_null (args_poll (args));
 	if (cmd == NULL)
@@ -222,8 +232,6 @@ static bool
 F_shell_command_on_region (long uniarg, Args *args)
 {
 	(void) uniarg;
-	if (remote_refuse (cur_bp, "shell-command-on-region"))
-		return false;
 	char *cmd = NULL;
 	if (args != NULL) {
 		/* Skip arguments `start' and `end' for Emacs compatibility. */
@@ -265,7 +273,13 @@ shell_init (void)
 		       "automatically displayed.\n"
 		       "\n"
 		       "The optional second argument OUTPUT-BUFFER, if non-nil,\n"
-		       "says to insert the output in the current buffer.");
+		       "says to insert the output in the current buffer.\n"
+		       "\n"
+		       "In a remote buffer, the command runs with sh on its machine, in its\n"
+		       "directory there. C-g and remote-timeout stop waiting for it, and try\n"
+		       "to stop it there with SIGTERM; this needs ps there and a working\n"
+		       "connection, and a command can ignore it or detach and go on running.\n"
+		       "A command that does not finish inserts nothing.");
 
 	lisp_func_new ("shell-command-on-region", F_shell_command_on_region, true,
 		       "Execute string command in inferior shell with region as input.\n"
@@ -277,5 +291,8 @@ shell_init (void)
 		       "in the echo area or in a buffer.\n"
 		       "If the output is short enough to display in the echo area, it is shown\n"
 		       "there.  Otherwise it is displayed in the buffer `*Shell Command Output*'.\n"
-		       "The output is available in that buffer in both cases.");
+		       "The output is available in that buffer in both cases.\n"
+		       "\n"
+		       "In a remote buffer, the command runs on its machine, as for\n"
+		       "`shell-command'; if it does not finish, the region is kept.");
 }

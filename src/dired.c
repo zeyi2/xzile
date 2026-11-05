@@ -1021,7 +1021,7 @@ F_dired_jump (long uniarg, Args *args)
 		dir = path_dirname (cur_bp->dired->dir);
 		file = path_basename (cur_bp->dired->dir);
 	} else
-		dir = xstrdup (cur_bp->dir);
+		dir = cur_bp->remote != NULL ? remote_buffer_dir (cur_bp) : xstrdup (cur_bp->dir);
 
 	bool ok = cur_bp->remote != NULL ? dired_remote (cur_bp->remote, dir) : dired (dir);
 	if (ok && file != NULL)

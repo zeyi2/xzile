@@ -1,0 +1,19 @@
+local: has XZ_REMOTE_HOME no ssh
+Here is a sample file.
+~/q it's "$(x)" \d
+remote: no XZ_REMOTE_HOME over ssh
+to-stderr
+it's|$HOME|a\b|
+stdin closed
+a
+b
+c
+two five five
+19
+the timed-out command was stopped
+b
+a
+c
+It has several lines.
+
+And more than one paragraph.

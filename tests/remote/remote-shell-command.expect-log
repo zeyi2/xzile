@@ -1,0 +1,6 @@
+Shell command on xztest
+Stopping the command on xztest
+error: Shell command on ssh:xztest did not finish: it was killed, or the connection was lost
+error: Cancelled: Shell command on ssh:xztest
+error: ssh xztest: no answer within 2 seconds (see remote-timeout)
+on ssh:xztest: No such directory, or it cannot be opened

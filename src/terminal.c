@@ -37,6 +37,8 @@ struct Shell {
 	Process *proc;
 	VTerm *vt;
 	char *program;		/* For messages. */
+	char *remote_dir;	/* On another machine (bp->remote), the
+				   directory there; bp->dir stays local. */
 	bool line_mode;
 };
 
@@ -71,8 +73,16 @@ shell_free (Buffer *bp)
 	process_free (sh->proc);
 	vterm_free (sh->vt);
 	free (sh->program);
+	free (sh->remote_dir);
 	free (sh);
 	bp->shell = NULL;
+}
+
+/* The remote directory of a terminal on another machine, or NULL. */
+const char *
+shell_directory (const Buffer *bp)
+{
+	return bp->shell != NULL && bp->remote != NULL ? bp->shell->remote_dir : NULL;
 }
 
 
@@ -105,7 +115,9 @@ hex_value (char c)
 	return -1;
 }
 
-/* Track the working directory from OSC 7, "file://HOST/PATH". */
+/* Track the working directory from OSC 7, "file://HOST/PATH". On a
+   remote terminal, the path is on its machine, and only taken if HOST
+   is that machine: a shell that ssh'ed elsewhere reports another. */
 static void
 vterm_osc (int code, const char *text, void *owner)
 {
@@ -115,6 +127,15 @@ vterm_osc (int code, const char *text, void *owner)
 	const char *path = strchr (text + 7, '/');
 	if (path == NULL)
 		return;
+	if (sh->bp->remote != NULL) {
+		char *host = xstrndup (text + 7, (size_t) (path - (text + 7)));
+		bool same = remote_same_host (sh->bp->remote, host);
+		if (!same)
+			debug_log ("remote", "%s: ignored OSC 7 for host %s", sh->bp->name, host);
+		free (host);
+		if (!same)
+			return;
+	}
 
 	StrBuf sb;
 	sb_init (&sb);
@@ -124,7 +145,12 @@ vterm_osc (int code, const char *text, void *owner)
 			s += 2;
 		} else
 			sb_addc (&sb, *s);
-	if (file_is_dir (sb.s)) {
+	if (sh->bp->remote != NULL) {
+		/* A remote name: it cannot be checked here. */
+		free (sh->remote_dir);
+		sh->remote_dir = sb_take (&sb);
+		debug_log ("remote", "%s: directory %s", sh->bp->name, sh->remote_dir);
+	} else if (file_is_dir (sb.s)) {
 		free (sh->bp->dir);
 		sh->bp->dir = sb_take (&sb);
 	} else
@@ -141,6 +167,9 @@ on_process_exit (Process *p, int status, void *owner)
 	char *msg;
 	if (WIFEXITED (status) && WEXITSTATUS (status) == 0)
 		msg = xasprintf ("\r\nProcess %s finished\r\n", sh->program);
+	else if (WIFEXITED (status) && WEXITSTATUS (status) == 255 && sh->bp->remote != NULL)
+		msg = xasprintf ("\r\nProcess %s exited with code 255: ssh failed, or the connection was lost\r\n",
+				 sh->program);
 	else if (WIFEXITED (status))
 		msg = xasprintf ("\r\nProcess %s exited abnormally with code %d\r\n", sh->program, WEXITSTATUS (status));
 	else
@@ -614,7 +643,12 @@ F_term_interrupt (long uniarg, Args *args)
 	(void) args;
 	if (!check_shell () || !process_alive (cur_bp->shell->proc))
 		return false;
-	process_signal (cur_bp->shell->proc, SIGINT);
+	/* Signalling ssh would end the session: the remote terminal
+	   interrupts its program instead, as for a typed C-c. */
+	if (cur_bp->remote != NULL)
+		process_send (cur_bp->shell->proc, "\003", 1);
+	else
+		process_signal (cur_bp->shell->proc, SIGINT);
 	return true;
 }
 
@@ -641,15 +675,18 @@ init_maps (void)
 }
 
 /* Start `argv' in the terminal buffer `bp', whose program has exited,
-   or if `bp' is NULL in a new buffer called `name' (made unique). */
+   or if `bp' is NULL in a new buffer called `name' (made unique). On
+   another machine, `r' is it and `rdir' the directory there. */
 static bool
-start_terminal (Buffer *bp, const char *name, const char *const *argv, const char *exec_path, const char *program)
+start_terminal (Buffer *bp, const char *name, const char *const *argv, const char *exec_path, const char *program,
+		Remote *r, const char *rdir)
 {
 	init_maps ();
 
 	int rows = (int) MAX (cur_wp->eheight, 1), cols = (int) MAX (cur_wp->ewidth, 1);
 	Shell *sh = xzalloc (sizeof (Shell));
 	sh->program = xstrdup (program);
+	sh->remote_dir = xstrdup_or_null (rdir);
 	sh->vt = vterm_new (rows, cols, vterm_reply, vterm_osc, sh);
 
 	static const char *const env[] = {
@@ -664,6 +701,7 @@ start_terminal (Buffer *bp, const char *name, const char *const *argv, const cha
 		minibuf_error ("Cannot start %s", program);
 		vterm_free (sh->vt);
 		free (sh->program);
+		free (sh->remote_dir);
 		free (sh);
 		return false;
 	}
@@ -679,6 +717,7 @@ start_terminal (Buffer *bp, const char *name, const char *const *argv, const cha
 		shell_free (bp);
 	free (bp->dir);
 	bp->dir = dir;
+	bp->remote = r;
 	bp->shell = sh;
 	sh->bp = bp;
 	enter_char_mode (sh);
@@ -693,45 +732,108 @@ user_shell (void)
 	return xstrdup (shell != NULL && shell[0] != '\0' ? shell : "/bin/sh");
 }
 
+/* The name of terminal buffers called `base' for `r': on another
+   machine, its label is added, so that each machine has its own. */
+static char *
+terminal_name (const char *base, Remote *r)
+{
+	return r != NULL ? xasprintf ("*%s ssh:%s*", base, remote_label (r)) : xasprintf ("*%s*", base);
+}
+
+/* Check that a terminal can be started on `r' in the directory of the
+   current buffer, there: its absolute name goes to `*dir', and the
+   remote user's $SHELL to `*shell'. Nothing local is used instead. */
+static bool
+check_remote_terminal (Remote *r, char **dir, char **shell)
+{
+	char *start = remote_buffer_dir (cur_bp);
+	bool ok = remote_terminal_check (r, start, dir, shell);
+	free (start);
+	if (!ok)
+		minibuf_error ("%s", remote_last_error ());
+	return ok;
+}
+
+/* Start `program' (NULL for the login shell `shell') in `dir' on `r',
+   as start_terminal does. */
+static bool
+start_remote_terminal (Buffer *bp, const char *name, Remote *r, const char *dir, const char *program,
+		       const char *shell)
+{
+	StrVec keep = { NULL, 0, 0 };
+	const char **argv = remote_terminal_argv (r, dir, program, &keep);
+	char *first = xstrndup (program != NULL ? program : shell, program != NULL ? strcspn (program, " \t")
+				: strlen (shell));
+	char *base = path_basename (first);
+	char *shown = xasprintf ("%s on ssh:%s", base, remote_label (r));
+	bool ok = start_terminal (bp, name, argv, NULL, shown, r, dir);
+	free (shown);
+	free (base);
+	free (first);
+	free (argv);
+	sv_clear (&keep);
+	free (keep.v);
+	return ok;
+}
+
 static bool
 F_shell (long uniarg, Args *args)
 {
-	if (remote_refuse (cur_bp, "shell"))
-		return false;
+	/* From a remote buffer, the shell runs on its machine. */
+	Remote *r = cur_bp->remote;
+	char *base_name = terminal_name ("shell", r);
 	/* A NULL `args' means a prefix argument was given. */
 	Buffer *bp = NULL;
 	char *name;
 	if (args == NULL && (lastflag & FLAG_UNIARG_EMPTY))
-		name = buffer_unique_name ("*shell*");
+		name = buffer_unique_name (base_name);
 	else {
 		long n = args == NULL ? uniarg : 1;
 		if (n < 1) {
 			minibuf_error ("Shell number must be positive");
+			free (base_name);
 			return false;
 		}
-		name = n == 1 ? xstrdup ("*shell*") : xasprintf ("*shell*<%ld>", n);
+		name = n == 1 ? xstrdup (base_name) : xasprintf ("%s<%ld>", base_name, n);
 		bp = buffer_find (name);
-		if (bp != NULL && bp->shell == NULL) {
-			minibuf_error ("Buffer %s is not a terminal", name);
+		if (bp != NULL && (bp->shell == NULL || bp->remote != r)) {
+			if (bp->shell == NULL)
+				minibuf_error ("Buffer %s is not a terminal", name);
+			else
+				minibuf_error ("Buffer %s is a terminal on %s%s", name, bp->remote != NULL ? "ssh:" : "",
+					       bp->remote != NULL ? remote_label (bp->remote) : "this machine");
 			free (name);
+			free (base_name);
 			return false;
 		}
 		if (bp != NULL && shell_process_alive (bp)) {
 			buffer_switch_to (bp, true);
 			free (name);
+			free (base_name);
 			return true;
 		}
 	}
+	free (base_name);
 
-	/* Run a login shell, as terminal emulators do. */
-	char *shell = user_shell ();
-	char *base = path_basename (shell);
-	char *argv0 = xstrcat3 ("-", base, "");
-	const char *argv[] = { argv0, NULL };
-	bool ok = start_terminal (bp, name, argv, shell, base);
-	free (argv0);
-	free (base);
-	free (shell);
+	bool ok;
+	if (r != NULL) {
+		char *dir, *shell;
+		ok = check_remote_terminal (r, &dir, &shell);
+		if (ok)
+			ok = start_remote_terminal (bp, name, r, dir, NULL, shell);
+		free (dir);
+		free (shell);
+	} else {
+		/* Run a login shell, as terminal emulators do. */
+		char *shell = user_shell ();
+		char *base = path_basename (shell);
+		char *argv0 = xstrcat3 ("-", base, "");
+		const char *argv[] = { argv0, NULL };
+		ok = start_terminal (bp, name, argv, shell, base, NULL, NULL);
+		free (argv0);
+		free (base);
+		free (shell);
+	}
 	free (name);
 	return ok;
 }
@@ -740,30 +842,43 @@ static bool
 F_term (long uniarg, Args *args)
 {
 	(void) uniarg;
-	if (remote_refuse (cur_bp, "term"))
-		return false;
+	Remote *r = cur_bp->remote;
+	char *dir = NULL, *shell;
+	if (r != NULL) {
+		if (!check_remote_terminal (r, &dir, &shell))
+			return false;
+	} else
+		shell = user_shell ();
 	char *program = xstrdup_or_null (args_poll (args));
 	if (program == NULL) {
-		char *shell = user_shell ();
-		program = minibuf_read ("Run program: ", shell);
-		free (shell);
-		if (program == NULL)
+		program = r != NULL ? minibuf_read ("Run program on ssh:%s: ", shell, remote_label (r))
+			: minibuf_read ("Run program: ", shell);
+		if (program == NULL) {
+			free (shell);
+			free (dir);
 			return funcall ("keyboard-quit");
+		}
 	}
-	if (program[0] == '\0') {
-		free (program);
-		return false;
+	bool ok = false;
+	if (program[0] != '\0' && r != NULL) {
+		char *name = terminal_name ("terminal", r);
+		char *unique = buffer_unique_name (name);
+		ok = start_remote_terminal (NULL, unique, r, dir, program, shell);
+		free (unique);
+		free (name);
+	} else if (program[0] != '\0') {
+		char *cmd = xstrcat3 ("exec ", program, "");
+		const char *argv[] = { "/bin/sh", "-c", cmd, NULL };
+		char *first = xstrndup (program, strcspn (program, " \t"));
+		char *base = path_basename (first);
+		ok = start_terminal (NULL, "*terminal*", argv, NULL, base, NULL, NULL);
+		free (base);
+		free (first);
+		free (cmd);
 	}
-
-	char *cmd = xstrcat3 ("exec ", program, "");
-	const char *argv[] = { "/bin/sh", "-c", cmd, NULL };
-	char *first = xstrndup (program, strcspn (program, " \t"));
-	char *base = path_basename (first);
-	bool ok = start_terminal (NULL, "*terminal*", argv, NULL, base);
-	free (base);
-	free (first);
-	free (cmd);
 	free (program);
+	free (shell);
+	free (dir);
 	return ok;
 }
 
@@ -778,6 +893,10 @@ terminal_init (void)
 		       "(N = 1 is *shell*). With just C-u, start another shell, in a new\n"
 		       "buffer *shell* or *shell*<N>.\n"
 		       "\n"
+		       "In a remote buffer, run the remote user's $SHELL on its machine, in\n"
+		       "its directory there, on a remote terminal; the buffers are then\n"
+		       "*shell ssh:HOST*, *shell ssh:HOST*<N>, apart from local shells.\n"
+		       "\n"
 		       "Keys go to the shell, except for C-x, which is a prefix for the usual\n"
 		       "C-x commands, and M-x. C-x C-x sends C-x, C-x C-y pastes the last\n"
 		       "killed text, and C-x C-j switches to line mode, where the scrollback\n"
@@ -787,6 +906,8 @@ terminal_init (void)
 		       "in its window.");
 	lisp_func_new ("term", F_term, true,
 		       "Run PROGRAM in a terminal buffer named *terminal*.\n"
+		       "In a remote buffer, run it on its machine, in its directory there,\n"
+		       "in *terminal ssh:HOST*; the default is the remote user's $SHELL.\n"
 		       "See `shell' for the keys.");
 	lisp_func_new ("term-send-raw", F_term_send_raw, false,
 		       "Send the last key typed to the terminal's program.");

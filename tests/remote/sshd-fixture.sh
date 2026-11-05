@@ -26,8 +26,12 @@
 # these hosts:
 #
 #   xztest     logs in with the user key; the remote home is DIR/home
+#   xzfq.example  the same, under a name with a domain
 #   xzbadkey   offers a key the server does not accept
 #   xznohostkey  knows no host key for the server
+#
+# The remote user's $SHELL is DIR/remote-shell, which runs sh with
+# XZ_REMOTE_SHELL=yes in its environment.
 #
 # Exits with status 77 if OpenSSH (ssh, sshd, ssh-keygen) is missing or
 # the server cannot be started. `stop' stops the server and removes DIR.
@@ -68,6 +72,8 @@ ssh-keygen -q -t ed25519 -N '' -f "$dir/hostkey" || exit 77
 ssh-keygen -q -t ed25519 -N '' -f "$dir/userkey" || exit 77
 ssh-keygen -q -t ed25519 -N '' -f "$dir/otherkey" || exit 77
 cp "$dir/userkey.pub" "$dir/authorized_keys"
+printf '#!/bin/sh\nXZ_REMOTE_SHELL=yes\nexport XZ_REMOTE_SHELL\nexec /bin/sh "$@"\n' > "$dir/remote-shell" &&
+	chmod 755 "$dir/remote-shell" || exit 1
 : > "$dir/no_known_hosts"
 
 started=
@@ -85,7 +91,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 UsePAM no
 StrictModes no
-SetEnv HOME=$dir/home
+SetEnv HOME=$dir/home SHELL=$dir/remote-shell
 PidFile $dir/sshd.pid
 EOF2
 	rm -f "$dir/sshd.pid"
@@ -109,13 +115,13 @@ hostkey=$(cut -d' ' -f1,2 "$dir/hostkey.pub")
 printf '[127.0.0.1]:%s %s\n[127.0.0.1]:%s %s\n' "$port" "$hostkey" "$port2" "$hostkey" > "$dir/known_hosts"
 echo "$port2" > "$dir/port2"
 cat > "$dir/ssh_config" <<EOF2
-Host xztest xzbadkey xznohostkey
+Host xztest xzfq.example xzbadkey xznohostkey
   HostName 127.0.0.1
   Port $port
   IdentitiesOnly yes
   GlobalKnownHostsFile /dev/null
   StrictHostKeyChecking yes
-Host xztest
+Host xztest xzfq.example
   IdentityFile $dir/userkey
   UserKnownHostsFile $dir/known_hosts
 Host xzbadkey

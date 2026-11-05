@@ -79,9 +79,16 @@ GNU Zile NEWS                                         -*- outline -*-
   ssh configuration alias, a recent connection, or a new host, user
   and port). Remote buffers can be visited, created, saved and
   reverted, and remote directories browsed in Dired; changing files
-  from Dired, shells, compilation, Magit and previews are refused
-  there. Saving checks that the remote file has not changed since it
-  was read, and keeps the buffer modified unless the write is
+  from Dired, compilation, Magit and previews are refused there.
+  Shells and shell commands run on the remote machine instead, in the
+  buffer's directory there: M-! and M-| with sh (C-g and
+  remote-timeout stop waiting, and try to stop the command there with
+  SIGTERM, which needs ps there and a working connection, and which a
+  command can ignore or escape; a command that does not finish changes
+  nothing), M-x shell with the remote $SHELL and M-x term on a remote
+  pseudo-terminal, in buffers of their own for each machine (*shell
+  ssh:host*). Saving checks that the remote file has not changed since
+  it was read, and keeps the buffer modified unless the write is
   confirmed. ssh runs in batch mode, so it never asks for passwords
   and never skips host key checks. Operations can be cancelled with
   C-g and time out after remote-timeout seconds; ssh-config-file

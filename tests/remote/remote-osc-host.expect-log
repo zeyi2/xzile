@@ -1,0 +1,2 @@
+*shell ssh:xzfq.example*: ignored OSC 7 for host xzfq.example.other
+*shell ssh:xzfq.example*: ignored OSC 7 for host xzfq.other

@@ -1,0 +1,26 @@
+*shell ssh:xztest* | Term: char run | ssh:xztest:~/t/sub
+*shell ssh:xztest*<2> | Term: char run | ssh:xztest:~/t
+*shell ssh:xztest*<3> | Term: char run | ssh:xztest:~/t
+*shell* | Term: char run
+*shell*<2> | Term: char run
+*terminal ssh:xztest* | Term: line exit | ssh:xztest:~/t
+Process remote-shell on ssh:xztest finished
+sub | Dired by name | ssh:xztest:~/t/sub
+1:yes:~/t:ssh:1
+/dev/pts/N
+after C-c
+after C-c C-c
+fewer rows
+2:~/t/sub
+3:~/t/sub
+local:no ssh:local shell
+local 2:no ssh
+remote 2:ssh
+local again
+4:~/t/sub
+new:~/t
+term:yes:~/t
+Here is a sample file.
+It has several lines.
+
+And more than one paragraph.
