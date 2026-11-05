@@ -47,7 +47,8 @@ run_test () {
 	[ -e "$input_file" ] || input_file=$srcdir/tests/test.input
 
 	cp "$input_file" "$edit_file" && chmod 644 "$edit_file" || return 1
-	errors=$("$editor" --no-init-file "$edit_file" --load "$test.el" </dev/null 2>&1 >/dev/null)
+	errors=$("$editor" --no-init-file "$edit_file" ${init_file:+--load "$init_file"} --load "$test.el" \
+		</dev/null 2>&1 >/dev/null)
 	status=$?
 	if [ $status -ne 0 ]; then
 		echo "FAIL: $name: exit status $status"
@@ -63,12 +64,70 @@ run_test () {
 		echo "FAIL: $name: wrong output"
 		return 1
 	fi
+	if [ -f "$test.expect-log" ]; then
+		while IFS= read -r line; do
+			if ! grep -F -q -- "$line" "$XZILE_DEBUG_LOG"; then
+				echo "FAIL: $name: debug log lacks: $line"
+				return 1
+			fi
+		done < "$test.expect-log"
+	fi
 	rm -f "$edit_file" "$edit_file~"
 	return 0
 }
 
 pass=0
 fail=0
+
+# The remote file tests, on a disposable SSH server. Each test's
+# debug log must contain the lines of its TEST.expect-log, if any.
+# The tests find the remote home directory in $XZ_REMOTE_HOME. A
+# TEST.test is a shell script that runs the editor itself, given the
+# server's directory in $XZ_FIXTURE; it prints why if it fails.
+run_remote_tests () {
+	fixture=$(mktemp -d "${TMPDIR:-/tmp}/xzile-sshd.XXXXXX") || return 1
+	reason=$(sh "$srcdir/tests/remote/sshd-fixture.sh" start "$fixture" 2>&1)
+	status=$?
+	if [ $status -ne 0 ]; then
+		sh "$srcdir/tests/remote/sshd-fixture.sh" stop "$fixture"
+		if [ $status -eq 77 ]; then
+			echo "SKIP: remote tests: $reason"
+			return 0
+		fi
+		echo "FAIL: remote tests: SSH server: $reason"
+		fail=$((fail + 1))
+		return 1
+	fi
+	printf '(setq ssh-config-file "%s/ssh_config")\n' "$fixture" > "$fixture/init.el"
+	XZ_REMOTE_HOME=$fixture/home XZILE_DEBUG=remote
+	export XZ_REMOTE_HOME XZILE_DEBUG
+	init_file=$fixture/init.el
+	XZILE_DEBUG_LOG=$fixture/debug.log
+	export XZILE_DEBUG_LOG
+	for t in "$@"; do
+		rm -f "$XZILE_DEBUG_LOG"
+		case $t in
+		*.test)
+			errors=$(XZILE=$editor XZ_FIXTURE=$fixture sh "$t" 2>&1)
+			if [ $? -eq 0 ]; then
+				pass=$((pass + 1))
+			else
+				echo "FAIL: ${t#"$srcdir"/tests/}:"
+				printf '%s\n' "$errors"
+				fail=$((fail + 1))
+			fi
+			continue
+			;;
+		esac
+		if run_test "$t"; then
+			pass=$((pass + 1))
+		else
+			fail=$((fail + 1))
+		fi
+	done
+	unset init_file XZ_REMOTE_HOME XZILE_DEBUG XZILE_DEBUG_LOG
+	sh "$srcdir/tests/remote/sshd-fixture.sh" stop "$fixture"
+}
 
 run_list () {
 	for t in "$@"; do
@@ -81,7 +140,12 @@ run_list () {
 }
 
 if [ $# -gt 0 ]; then
-	run_list "$@"
+	for t in "$@"; do
+		case $t in
+			*/remote/*) run_remote_tests "$t" ;;
+			*) run_list "$t" ;;
+		esac
+	done
 else
 	run_list "$srcdir"/tests/*.el "$srcdir"/tests/interactive/*.el \
 		"$srcdir"/tests/regression/*.el "$srcdir"/tests/zile-only/*.el \
@@ -92,6 +156,8 @@ else
 	export COLUMNS LINES
 	run_list "$srcdir"/tests/zile-only/fixed-screen/*.el
 	unset COLUMNS LINES
+
+	run_remote_tests "$srcdir"/tests/remote/*.el "$srcdir"/tests/remote/*.test
 
 	# An unknown option is reported in the minibuffer, not on stderr.
 	errors=$("$editor" --unknown-flag --load "$srcdir/tests/quit.el" </dev/null 2>&1 >/dev/null)

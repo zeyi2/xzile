@@ -1,0 +1,243 @@
+#!/bin/sh
+# Saved locations survive restarts, in ~/.xzile.d/locations
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE, XZ_FIXTURE (the SSH server's
+# directory) and XZ_REMOTE_HOME set. Each step is a separate editor
+# process with HOME set to a fresh directory, so that the user's own
+# state is never read or written. Prints why on failure.
+
+set -u
+
+fx=$XZ_FIXTURE
+rhome=$XZ_REMOTE_HOME
+port2=$(cat "$fx/port2")
+me=$(id -un)
+real_home=$HOME
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-state.XXXXXX") || exit 1
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
+H=$work/home
+mkdir "$H"
+printf '(setq ssh-config-file "%s/ssh_config")\n' "$fx" > "$H/.xzile"
+state=$H/.xzile.d/locations
+log=$work/debug.log
+
+fail () {
+	echo "$*"
+	[ -f "$state" ] && { echo "--- $state:"; cat "$state"; }
+	exit 1
+}
+
+real_before=$(ls -ld --full-time "$real_home/.xzile.d" "$real_home/.xzile.d/locations" 2>&1)
+
+mkdir "$rhome/a" "$rhome/b" "$rhome/c	d"
+echo 'in a' > "$rhome/a/f.txt"
+echo 'in b' > "$rhome/b/f.txt"
+echo 'in c' > "$rhome/c	d/f.txt"
+# A local directory whose name has a tab and a newline.
+local_dir=$(printf '%s/lo\tcal\nx' "$work")
+mkdir "$local_dir"
+echo 'in local' > "$local_dir/f.txt"
+
+# Run the editor on out.txt with the keys `$1' (a Lisp string body),
+# then save out.txt and quit. Extra arguments go before the file.
+run () {
+	keys=$1
+	shift
+	: > "$work/out.txt"
+	printf '(execute-kbd-macro "%s\\C-xbout.txt\\r\\C-x\\C-s\\C-x\\C-c")\n' "$keys" > "$work/keys.el"
+	rm -f "$log"
+	errors=$(cd "$work" && HOME=$H XZILE_DEBUG=remote XZILE_DEBUG_LOG=$log \
+		"$XZILE" "$@" out.txt --load "$work/keys.el" </dev/null 2>&1 >/dev/null)
+	status=$?
+	[ $status -eq 0 ] || fail "exit status $status: $errors"
+	[ -z "$errors" ] || fail "output on stderr: $errors"
+}
+
+# Keys to copy the current buffer to the end of out.txt.
+copy='\C-xh\M-w\C-xbout.txt\r\M->\C-y'
+
+expect_out () {
+	printf "$1" | cmp -s - "$work/out.txt" || fail "$2: out.txt is:
+$(cat "$work/out.txt")"
+}
+
+# 1. Connect to xztest and open a/f.txt; make a new connection with
+# an explicit user and the second port and open b/f.txt; fail to
+# connect to xzbadkey; open the local f.txt, completing the
+# directory's name with TAB.
+run "\\C-x\\C-f\\M-lxztest\\ra/f.txt\\r$copy\
+\\C-x\\C-f\\M-lNew SSH\\rxztest\\r$me\\r$port2\\rb/f.txt\\r$copy\
+\\C-x\\C-f\\M-lxzbadkey\\r\\M-l\\C-g\
+\\C-x\\C-f\\M-lLocal\\r\\C-a\\C-k$work/lo\\tf.txt\\r$copy"
+expect_out 'in a\nin b\nin local\n' "step 1"
+printf 'xzile-locations 1\nlocal\t%s/lo\\tcal\\nx\nssh\txztest\t%s\t%s\t%s/b\nssh\txztest\t\t\t%s/a\n' \
+	"$work" "$me" "$port2" "$rhome" "$rhome" | cmp -s - "$state" || fail "step 1: wrong saved locations"
+[ "$(stat -c %a "$H/.xzile.d")" = 700 ] || fail "step 1: ~/.xzile.d is not private"
+[ "$(stat -c %a "$state")" = 600 ] || fail "step 1: the locations file is not private"
+[ "$(stat -c %a "$H/.xzile.d/locations.lock")" = 600 ] || fail "step 1: the lock file is not private"
+[ "$(ls -A "$H/.xzile.d" | tr '\n' ' ')" = "locations locations.lock " ] ||
+	fail "step 1: stray files in ~/.xzile.d: $(ls -A "$H/.xzile.d")"
+
+# 2. A new process starts each location in its saved directory:
+# the explicit connection in b/, here in the odd local directory
+# (reached from a remote buffer), xztest in a/.
+run "\\C-x\\C-f\\M-l$me@xztest:$port2\\rf.txt\\r$copy\
+\\C-xbf.txt\\r\\C-x\\C-f\\M-lLocal\\rf.txt\\r$copy\
+\\C-x\\C-f\\M-lxztest\\rf.txt\\r$copy"
+expect_out 'in b\nin local\nin a\n' "step 2"
+grep -F -q "saved locations: 3 loaded" "$log" || fail "step 2: state not loaded"
+
+# 3. Malformed records are ignored and dropped on the next save; an
+# escaped tab in a hand-written record is decoded.
+{
+	cat "$state"
+	printf 'ssh\t-oProxyCommand=evil\t\t\t/tmp\n'
+	printf 'ssh\txztest\tbad user\t\t/tmp\n'
+	printf 'ssh\txztest\t\t99999\t/tmp\n'
+	printf 'ssh\txztest\t\t\t/tmp\\q\n'
+	printf 'ssh\txztest\n'
+	printf 'local\trelative\n'
+	printf 'unknown\trecord\n'
+	printf 'ssh\txztest\t\t%s\t%s/c\\td\n' "$port2" "$rhome"
+} > "$work/edited" && cp "$work/edited" "$state"
+run "\\C-x\\C-f\\M-lxztest:$port2\\rf.txt\\r$copy"
+expect_out 'in c\n' "step 3"
+grep -F -q "ignored line" "$log" || fail "step 3: malformed lines not reported"
+grep -q -e 'evil' -e 'bad user' -e '99999' -e 'relative' -e 'unknown' "$state" &&
+	fail "step 3: malformed records kept"
+[ "$(sed -n 2p "$state")" = "$(printf 'ssh\txztest\t\t%s\t%s/c\\td' "$port2" "$rhome")" ] ||
+	fail "step 3: the record used is not first"
+[ "$(wc -l < "$state")" -eq 5 ] || fail "step 3: valid records lost"
+
+# 4. A failed connection changes nothing (M-l goes back from the
+# location list, then C-g cancels: a C-g next in line would cancel the
+# connection instead); nor does a failure to save, which leaves the
+# editor working.
+cp "$state" "$work/before"
+run "\\C-x\\C-f\\M-lxzbadkey\\r\\M-l\\C-g"
+grep -F -q "ssh xzbadkey: authentication failed" "$log" || fail "step 4: the connection did not fail"
+cmp -s "$work/before" "$state" || fail "step 4: a failed connection changed the state"
+chmod 500 "$H/.xzile.d"
+run "\\C-x\\C-f\\M-lxztest\\r\\C-a\\C-k~/b/f.txt\\r$copy"
+chmod 700 "$H/.xzile.d"
+expect_out 'in b\n' "step 4"
+cmp -s "$work/before" "$state" || fail "step 4: a failed save changed the state"
+# Both saves (the connection, then the file) fail; the warning is
+# shown once.
+[ "$(grep -c "saved locations: not saved: cannot write ~/.xzile.d/locations" "$log")" -eq 2 ] ||
+	fail "step 4: the failed saves are not both noted"
+[ "$(grep -c "Warning: locations not saved: cannot write ~/.xzile.d/locations" "$log")" -eq 1 ] ||
+	fail "step 4: the warning is not shown exactly once"
+
+# 5. A file of another version is left alone.
+printf 'xzile-locations 2\nfuture\trecord\n' > "$state"
+cp "$state" "$work/before"
+run "\\C-x\\C-f\\M-lxztest\\ra/f.txt\\r$copy"
+expect_out 'in a\n' "step 5"
+cmp -s "$work/before" "$state" || fail "step 5: a file of another version was replaced"
+
+# 6. With -q nothing is read or written.
+rm -rf "$H/.xzile.d"
+run "\\C-x\\C-f\\M-lxztest\\ra/f.txt\\r$copy" -q --load "$H/.xzile"
+expect_out 'in a\n' "step 6"
+[ -e "$H/.xzile.d" ] && fail "step 6: -q wrote the state"
+
+# 7, 8. The editor saves under the lock on ~/.xzile.d/locations.lock.
+# Another process holding that lock (with fcntl, through Python's
+# lockf) read the state before the editor saves, and writes it back
+# with a record of its own after: the editor waits, then keeps both.
+# Held for longer than the editor waits (2 seconds), the editor warns
+# and leaves the file alone, with the file still opened.
+hold () {
+	rm -f "$work/ready"
+	python3 - "$H/.xzile.d/locations.lock" "$state" "$work/ready" "$@" <<'PY' &
+import fcntl, os, sys, time
+lock, state, ready, secs = sys.argv[1:5]
+record = sys.argv[5] if len(sys.argv) > 5 else ''
+fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.lockf(fd, fcntl.LOCK_EX)
+with open(state) as f:
+    old = f.read()
+open(ready, 'w').close()
+time.sleep(float(secs))
+if record:
+    with open(state + '.holder', 'w') as f:
+        f.write(old + record + '\n')
+    os.rename(state + '.holder', state)
+PY
+	holder=$!
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+		[ -e "$work/ready" ] && return 0
+		sleep 0.1
+	done
+	fail "the lock holder did not start"
+}
+if command -v python3 >/dev/null 2>&1; then
+	rm -f "$state"
+	run "\\C-x\\C-f\\M-lxztest\\rb/f.txt\\r$copy"
+	hold 1.5 "$(printf 'ssh\tholder.example\t\t\t/holder')"
+	run "\\C-x\\C-f\\M-lxztest:$port2\\ra/f.txt\\r$copy"
+	wait "$holder" || fail "step 7: the lock holder failed"
+	expect_out 'in a\n' "step 7"
+	grep -q "^ssh	holder.example		" "$state" || fail "step 7: the other process's record was lost"
+	[ "$(sed -n 2p "$state")" = "$(printf 'ssh\txztest\t\t%s\t%s/a' "$port2" "$rhome")" ] ||
+		fail "step 7: the editor's record was lost"
+	grep -q "^ssh	xztest			$rhome/b\$" "$state" || fail "step 7: an older record was lost"
+
+	cp "$state" "$work/before"
+	hold 5
+	run "\\C-x\\C-f\\M-lxztest\\r\\C-a\\C-k~/b/f.txt\\r$copy"
+	wait "$holder"
+	expect_out 'in b\n' "step 8"
+	cmp -s "$work/before" "$state" || fail "step 8: the state changed without the lock"
+	[ "$(grep -c "Warning: locations not saved: another session kept ~/.xzile.d/locations locked" "$log")" -eq 1 ] ||
+		fail "step 8: no single warning that the state is locked"
+fi
+
+# 9. Editors saving at the same time keep each other's records.
+rm -f "$state"
+port1=$((port2 - 1))
+labels="xztest xztest:$port1 xztest:$port2 $me@xztest $me@xztest:$port1 $me@xztest:$port2"
+i=0
+for label in $labels; do
+	i=$((i + 1))
+	mkdir "$work/p$i"
+	: > "$work/p$i/out.txt"
+	printf '(execute-kbd-macro "\\C-x\\C-f\\M-l%s\\r\\C-a\\C-k~/a/f.txt\\r\\C-x\\C-c")\n' "$label" > "$work/p$i/keys.el"
+	(cd "$work/p$i" && HOME=$H "$XZILE" out.txt --load keys.el </dev/null >/dev/null 2>"$work/p$i/err"
+	 echo $? > "$work/p$i/status") &
+done
+wait
+i=0
+for label in $labels; do
+	i=$((i + 1))
+	[ "$(cat "$work/p$i/status")" = 0 ] && [ ! -s "$work/p$i/err" ] ||
+		fail "step 9: editor $i ($label) failed: $(cat "$work/p$i/err")"
+done
+for rec in "xztest			" "xztest		$port1	" "xztest		$port2	" "xztest	$me		" \
+		"xztest	$me	$port1	" "xztest	$me	$port2	"; do
+	grep -q "^ssh	$rec$rhome/a\$" "$state" || fail "step 9: lost record: ssh	$rec"
+done
+[ "$(wc -l < "$state")" -eq 7 ] || fail "step 9: wrong number of records"
+
+[ "$(ls -ld --full-time "$real_home/.xzile.d" "$real_home/.xzile.d/locations" 2>&1)" = "$real_before" ] ||
+	fail "the real home directory's state changed"
+exit 0

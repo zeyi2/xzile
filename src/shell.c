@@ -202,6 +202,8 @@ static bool
 F_shell_command (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "shell-command"))
+		return false;
 	bool ok = true;
 	char *cmd = xstrdup_or_null (args_poll (args));
 	if (cmd == NULL)
@@ -220,6 +222,8 @@ static bool
 F_shell_command_on_region (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "shell-command-on-region"))
+		return false;
 	char *cmd = NULL;
 	if (args != NULL) {
 		/* Skip arguments `start' and `end' for Emacs compatibility. */

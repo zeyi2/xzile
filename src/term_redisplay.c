@@ -344,6 +344,8 @@ draw_gui_status_line (size_t line, size_t leftcol, Window *wp)
 	size_t name_at = left.len;
 	sb_add (&left, wp->bp->name);
 	size_t name_end = left.len;
+	if (wp->bp->remote != NULL)
+		sb_addf (&left, "  ssh:%s", remote_label (wp->bp->remote));
 	if (wp->bp->readonly)
 		sb_add (&left, "  [read-only]");
 	if (wp->bp->autofill)
@@ -410,10 +412,15 @@ draw_status_line (size_t line, size_t leftcol, Window *wp)
 	size_t n = buffer_offset_to_line (wp->bp, window_o (wp));
 	char *pos = make_screen_pos (wp);
 	char *linecol = xasprintf ("(%zu,%zu)", n + 1, buffer_calculate_goalc (wp->bp, window_o (wp)));
+	/* The machine of a remote buffer goes with its name. */
+	char *name = wp->bp->remote != NULL
+		? xasprintf ("%s  ssh:%s", wp->bp->name, remote_label (wp->bp->remote))
+		: xstrdup (wp->bp->name);
 	StrBuf a;
 	sb_init (&a);
 	sb_addf (&a, "--%s%2s  %-15s   %s %-9s (%s", eol_type, make_mode_line_flags (wp),
-		 wp->bp->name, pos, linecol, buffer_mode_name (wp->bp));
+		 name, pos, linecol, buffer_mode_name (wp->bp));
+	free (name);
 	free (pos);
 	free (linecol);
 

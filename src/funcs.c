@@ -372,7 +372,11 @@ write_buffers_list (void *data)
 				 bp->readonly ? '%' : ' ',
 				 bp->modified ? '*' : ' ',
 				 bp->name, buffer_length (bp), buffer_mode_name (bp));
-			if (bp->filename != NULL) {
+			char *remote = remote_describe (bp);
+			if (remote != NULL) {
+				bprintf ("%s", remote);
+				free (remote);
+			} else if (bp->filename != NULL) {
 				char *p = compact_path (bp->filename);
 				bprintf ("%s", p);
 				free (p);

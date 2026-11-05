@@ -245,6 +245,73 @@ make_listing (const char *dir, bool by_date, size_t *name_col)
 	return sb_take (&sb);
 }
 
+static int
+compare_remote_entries (const void *a, const void *b)
+{
+	const RemoteEntry *ea = a, *eb = b;
+	bool da = strcmp (ea->name, ".") == 0 || strcmp (ea->name, "..") == 0;
+	bool db = strcmp (eb->name, ".") == 0 || strcmp (eb->name, "..") == 0;
+	if (da != db)
+		return da ? -1 : 1;
+	return strcmp (ea->name, eb->name);
+}
+
+/* Produce the listing of `dir' on `r', in the same columns as
+   make_listing; returns NULL with the remote error set. */
+static char *
+make_remote_listing (Remote *r, const char *dir, size_t *name_col)
+{
+	RemoteEntry *v;
+	size_t n;
+	if (!remote_list (r, dir, true, &v, &n))
+		return NULL;
+	qsort (v, n, sizeof (RemoteEntry), compare_remote_entries);
+
+	size_t w[5] = { 10, 1, 1, 1, 1 };
+	for (size_t i = 0; i < n; i++)
+		for (size_t k = 1; k < 5; k++)
+			if (v[i].info[k] != NULL)
+				w[k] = MAX (w[k], strlen (v[i].info[k]));
+
+	StrBuf sb;
+	sb_init (&sb);
+	sb_addf (&sb, "  ssh:%s:%s%s:\n", remote_label (r), dir, strcmp (dir, "/") == 0 ? "" : "/");
+	sb_addf (&sb, "  remote directory: files can be opened, not renamed, copied or deleted here\n");
+	*name_col = 2 + 10 + 1 + w[1] + 1 + w[2] + 1 + w[3] + 1 + w[4] + 1 + 12 + 1;
+	for (size_t i = 0; i < n; i++) {
+		RemoteEntry *e = &v[i];
+		const char *mode = e->info[0] != NULL ? e->info[0] : e->dir ? "d?????????" : "-?????????";
+		const char *f[5];
+		for (size_t k = 1; k < 5; k++)
+			f[k] = e->info[k] != NULL ? e->info[k] : "?";
+		sb_addf (&sb, "  %-10.10s %*s %-*s %-*s %*s %-12.12s %s", mode,
+			 (int) w[1], f[1], (int) w[2], f[2], (int) w[3], f[3], (int) w[4], f[4],
+			 e->info[5] != NULL ? e->info[5] : "", e->name);
+		if (e->link != NULL && mode[0] == 'l')
+			sb_addf (&sb, " -> %s", e->link);
+		sb_addc (&sb, '\n');
+	}
+	remote_entries_free (v, n);
+	return sb_take (&sb);
+}
+
+/* The listing of a directory here or on `r'; NULL, having said why,
+   if it cannot be read. */
+static char *
+dir_listing (Remote *r, const char *dir, bool by_date, size_t *name_col)
+{
+	char *text;
+	if (r != NULL) {
+		text = make_remote_listing (r, dir, name_col);
+		if (text == NULL)
+			minibuf_error ("%s", remote_last_error ());
+	} else {
+		text = make_listing (dir, by_date, name_col);
+		if (text == NULL)
+			minibuf_error ("Opening directory: %s: %s", dir, strerror (errno));
+	}
+	return text;
+}
 
 /*--------------------------------------------------------------------------
  * Reading and changing the buffer.
@@ -333,11 +400,9 @@ dired_refresh (Buffer *bp)
 {
 	Dired *d = bp->dired;
 	size_t name_col;
-	char *text = make_listing (d->dir, d->by_date, &name_col);
-	if (text == NULL) {
-		minibuf_error ("Opening directory: %s: %s", d->dir, strerror (errno));
+	char *text = dir_listing (bp->remote, d->dir, d->by_date, &name_col);
+	if (text == NULL)
 		return false;
-	}
 
 	Map *marks = map_new ();
 	char *point_name = NULL;
@@ -570,7 +635,7 @@ enum Operation { OP_COPY, OP_RENAME };
 static bool
 do_copy_or_rename (enum Operation op)
 {
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, op == OP_COPY ? "dired-do-copy" : "dired-do-rename"))
 		return false;
 
 	StrVec names = { NULL, 0, 0 };
@@ -764,31 +829,22 @@ static const Mode dired_date_mode = { "Dired by date", dired_scan_line, NULL, NU
 
 static void init_dired_map (void);
 
-bool
-dired (const char *dir_in)
+/* Open a Dired buffer for `dir' (absolute, without a trailing slash,
+   and owned by this function) here or on `r'. */
+static bool
+open_dired (Remote *r, char *dir)
 {
-	char *dir = expand_path (dir_in);
-	if (dir == NULL || !file_is_dir (dir)) {
-		minibuf_error ("%s: No such directory", dir_in);
-		free (dir);
-		return false;
-	}
-	size_t len = strlen (dir);
-	while (len > 1 && dir[len - 1] == '/')
-		dir[--len] = '\0';
-
 	/* Reuse an existing buffer for the directory. */
 	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next)
-		if (bp->dired != NULL && strcmp (bp->dired->dir, dir) == 0) {
+		if (bp->dired != NULL && bp->remote == r && strcmp (bp->dired->dir, dir) == 0) {
 			buffer_switch_to (bp, true);
 			free (dir);
 			return true;
 		}
 
 	size_t name_col;
-	char *text = make_listing (dir, false, &name_col);
+	char *text = dir_listing (r, dir, false, &name_col);
 	if (text == NULL) {
-		minibuf_error ("Opening directory: %s: %s", dir, strerror (errno));
 		free (dir);
 		return false;
 	}
@@ -803,8 +859,11 @@ dired (const char *dir_in)
 	bp->dired = xzalloc (sizeof (Dired));
 	bp->dired->dir = dir;
 	bp->dired->name_col = name_col;
-	free (bp->dir);
-	bp->dir = xstrdup (dir);
+	bp->remote = r;
+	if (r == NULL) {
+		free (bp->dir);
+		bp->dir = xstrdup (dir);
+	}
 	bp->nosave = true;
 	bp->noundo = true;
 	bp->keymap = dired_map;
@@ -837,6 +896,51 @@ dired (const char *dir_in)
 	return true;
 }
 
+static void
+strip_slashes (char *dir)
+{
+	size_t len = strlen (dir);
+	while (len > 1 && dir[len - 1] == '/')
+		dir[--len] = '\0';
+}
+
+bool
+dired (const char *dir_in)
+{
+	char *dir = expand_path (dir_in);
+	if (dir == NULL || !file_is_dir (dir)) {
+		minibuf_error ("%s: No such directory", dir_in);
+		free (dir);
+		return false;
+	}
+	strip_slashes (dir);
+	return open_dired (NULL, dir);
+}
+
+/* Like dired, for the directory `dir_in' on `r'. */
+bool
+dired_remote (Remote *r, const char *dir_in)
+{
+	char *dir = remote_expand_path (r, dir_in);
+	if (dir == NULL) {
+		minibuf_error ("%s", remote_last_error ());
+		return false;
+	}
+	strip_slashes (dir);
+	char *noted = xstrdup (dir);
+	bool ok = open_dired (r, dir);
+	if (ok)
+		location_note (r, noted);
+	free (noted);
+	return ok;
+}
+
+/* The directory a Dired buffer lists, or NULL. */
+const char *
+dired_directory (const Buffer *bp)
+{
+	return bp->dired != NULL ? bp->dired->dir : NULL;
+}
 static int
 dired_scan_line (const Mode *mode, Buffer *bp, size_t line_idx, size_t start_o,
 		 size_t len, int start_state, const char **face_names)
@@ -886,13 +990,19 @@ static bool
 F_dired (long uniarg, Args *args)
 {
 	(void) uniarg;
+	Remote *loc = NULL;
 	char *dir = xstrdup_or_null (args_poll (args));
 	if (dir == NULL) {
-		dir = minibuf_read_file_to_visit ("Dired (directory): ", cur_bp->dir, NULL);
+		loc = cur_bp->remote;
+		char *start = remote_buffer_dir (cur_bp);
+		dir = minibuf_read_location_file ("Dired (directory): ", &loc, start != NULL ? start : cur_bp->dir, NULL);
+		free (start);
 		if (dir == NULL)
 			return funcall ("keyboard-quit");
 	}
-	bool ok = dir[0] != '\0' && dired (dir);
+	bool ok = dir[0] != '\0' && (loc != NULL ? dired_remote (loc, dir) : dired (dir));
+	if (ok && loc == NULL && cur_bp->dired != NULL)
+		location_note (NULL, cur_bp->dired->dir);
 	free (dir);
 	return ok;
 }
@@ -903,16 +1013,17 @@ F_dired_jump (long uniarg, Args *args)
 	(void) uniarg;
 	(void) args;
 	char *dir, *file = NULL;
-	if (cur_bp->filename != NULL) {
-		dir = path_dirname (cur_bp->filename);
-		file = path_basename (cur_bp->filename);
+	const char *visited = cur_bp->remote != NULL ? cur_bp->remote_path : cur_bp->filename;
+	if (visited != NULL) {
+		dir = path_dirname (visited);
+		file = path_basename (visited);
 	} else if (cur_bp->dired != NULL) {
 		dir = path_dirname (cur_bp->dired->dir);
 		file = path_basename (cur_bp->dired->dir);
 	} else
 		dir = xstrdup (cur_bp->dir);
 
-	bool ok = dired (dir);
+	bool ok = cur_bp->remote != NULL ? dired_remote (cur_bp->remote, dir) : dired (dir);
 	if (ok && file != NULL)
 		goto_entry (cur_bp, file);
 	free (dir);
@@ -1103,7 +1214,7 @@ F_dired_do_flagged_delete (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, "dired-do-flagged-delete"))
 		return false;
 	StrVec names = { NULL, 0, 0 };
 	marked_entries (cur_bp, 'D', &names);
@@ -1121,7 +1232,7 @@ F_dired_do_delete (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, "dired-do-delete"))
 		return false;
 	StrVec names = { NULL, 0, 0 };
 	bool ok = target_entries (cur_bp, &names) && delete_entries (&names);
@@ -1150,7 +1261,7 @@ F_dired_do_chmod (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, "dired-do-chmod"))
 		return false;
 	StrVec names = { NULL, 0, 0 };
 	if (!target_entries (cur_bp, &names))
@@ -1188,7 +1299,7 @@ static bool
 F_dired_create_directory (long uniarg, Args *args)
 {
 	(void) uniarg;
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, "dired-create-directory"))
 		return false;
 	char *dir = xstrdup_or_null (args_poll (args));
 	if (dir == NULL)
@@ -1303,10 +1414,22 @@ F_dired_copy_filename_as_kill (long uniarg, Args *args)
 	return true;
 }
 
+/* Visit `path', listed in a Dired buffer here or on `r'. For a remote
+   entry, `dir' says the listing shows a directory. */
 static bool
-visit (const char *path)
+visit (Remote *r, const char *path, bool dir)
 {
+	if (r != NULL)
+		return dir ? dired_remote (r, path) : find_file_remote (r, path);
 	return file_is_dir (path) ? dired (path) : find_file (path);
+}
+
+/* Whether the current line lists a directory. */
+static bool
+line_is_dir (Buffer *bp)
+{
+	size_t lo = buffer_line_o (bp);
+	return buffer_end_of_line (bp, lo) > lo + 2 && buffer_get_char (bp, lo + 2) == 'd';
 }
 
 static char *
@@ -1335,8 +1458,10 @@ F_dired_find_file (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	Remote *r = cur_bp->remote;
+	bool dir = line_is_dir (cur_bp);
 	char *path = current_path ();
-	bool ok = path != NULL && visit (path);
+	bool ok = path != NULL && visit (r, path, dir);
 	free (path);
 	return ok;
 }
@@ -1346,13 +1471,15 @@ F_dired_find_file_other_window (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	Remote *r = cur_bp->remote;
+	bool dir = line_is_dir (cur_bp);
 	char *path = current_path ();
 	if (path == NULL)
 		return false;
 	if (head_wp->next == NULL)
 		funcall ("split-window");
 	funcall ("other-window");
-	bool ok = visit (path);
+	bool ok = visit (r, path, dir);
 	free (path);
 	return ok;
 }
@@ -1362,8 +1489,10 @@ F_dired_view_file (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	Remote *r = cur_bp->remote;
+	bool dir = line_is_dir (cur_bp);
 	char *path = current_path ();
-	bool ok = path != NULL && visit (path);
+	bool ok = path != NULL && visit (r, path, dir);
 	if (ok && cur_bp->dired == NULL)
 		cur_bp->readonly = true;
 	free (path);
@@ -1384,7 +1513,7 @@ F_dired_up_directory (long uniarg, Args *args)
 	}
 	char *parent = path_dirname (dir);
 	char *base = path_basename (dir);
-	bool ok = dired (parent);
+	bool ok = cur_bp->remote != NULL ? dired_remote (cur_bp->remote, parent) : dired (parent);
 	if (ok)
 		goto_entry (cur_bp, base);
 	free (dir);
@@ -1406,7 +1535,7 @@ F_dired_sort_toggle (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	if (!check_dired ())
+	if (!check_dired () || remote_refuse (cur_bp, "Sorting by date"))
 		return false;
 	cur_bp->dired->by_date = !cur_bp->dired->by_date;
 	buffer_set_highlighter (cur_bp, cur_bp->dired->by_date ? &dired_date_mode : &dired_name_mode);

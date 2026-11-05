@@ -1,0 +1,49 @@
+#!/bin/sh
+# Every alias of a Host line is offered as a location
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. The aliases are separated by
+# runs of spaces and tabs. Each is chosen in the location list by a
+# fuzzy abbreviation, which selects it only if it is listed (typed
+# input would be taken as a host name of its own): the connection
+# attempt in the debug log names the alias. Nothing listens on port 1,
+# so each attempt fails at once and M-l goes back.
+
+set -u
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-config.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+
+printf 'Host xzalpha   xzbeta\t \t xzgamma  \t# xzbogus\n  HostName 127.0.0.1\n  Port 1\n' > "$work/config"
+printf '(setq ssh-config-file "%s/config")\n' "$work" > "$work/init.el"
+: > "$work/out.txt"
+printf '(execute-kbd-macro "%s%s%s\\C-x\\C-c")\n' '\C-x\C-f\M-llph\r\M-l\C-g' \
+	'\C-x\C-f\M-lbta\r\M-l\C-g' '\C-x\C-f\M-lgmm\r\M-l\C-g' > "$work/keys.el"
+errors=$(cd "$work" && XZILE_DEBUG=remote XZILE_DEBUG_LOG=$work/debug.log \
+	"$XZILE" -q out.txt --load init.el --load keys.el </dev/null 2>&1 >/dev/null)
+status=$?
+[ $status -eq 0 ] && [ -z "$errors" ] || { echo "exit status $status: $errors"; exit 1; }
+for alias in xzalpha xzbeta xzgamma; do
+	grep -F -q "remote: Connecting on $alias" "$work/debug.log" || {
+		echo "$alias is not offered; debug log:"
+		cat "$work/debug.log"
+		exit 1
+	}
+done
+exit 0

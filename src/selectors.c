@@ -178,6 +178,307 @@ picker_read_file (const char *prompt, const char *initial, History *hp, bool vis
 }
 
 
+/* Locations for the file picker: this machine, or one reached by SSH. */
+enum { L_LOCAL, L_RECENT, L_SAVED, L_CONFIG, L_NEW };
+
+static const char *const location_groups[] = { "This machine", "Recent connections", "Saved connections",
+						"SSH configuration", "Other", NULL };
+
+/* Longest first: the picker shows the longest that fits. */
+static const char *const location_hints[] = { "  [C-n/C-p: move  RET: choose  M-l/C-g: back]",
+					      "  [RET: choose  M-l/C-g: back]", "  [M-l/C-g: back]", "  [M-l/C-g]", NULL };
+static const char *const file_hints[] = { "  [M-l: location  TAB: complete  C-n/C-p: move  C-g: cancel]",
+					  "  [M-l: location  TAB: complete  C-g: cancel]",
+					  "  [M-l: location  C-g: cancel]", "  [M-l: location]", "  [M-l]", NULL };
+
+#define NEW_CONNECTION "New SSH connection..."
+
+/* Ask for a host, user and port; NULL if cancelled or invalid, with
+   `*notice' saying why when invalid. */
+static Remote *
+read_new_connection (char **notice)
+{
+	Remote *r = NULL;
+	char *host = minibuf_read ("SSH host name: ", "");
+	if (host == NULL || host[0] == '\0') {
+		free (host);
+		return NULL;
+	}
+	char *user = minibuf_read ("User on %s (RET for ssh's default): ", "", host);
+	char *port = user != NULL ? minibuf_read ("Port on %s (RET for ssh's default): ", "", host) : NULL;
+	if (user != NULL && port != NULL) {
+		r = remote_get (host, user, port);
+		if (r == NULL)
+			*notice = xstrdup (remote_last_error ());
+	}
+	free (host);
+	free (user);
+	free (port);
+	return r;
+}
+
+/* "what", and the directory last browsed on `r' if known. */
+static char *
+location_annotation (Remote *r, const char *what)
+{
+	const char *dir = location_dir (r);
+	if (dir == NULL)
+		return xstrdup (what);
+	char *c = r != NULL ? remote_compact_path (r, dir) : compact_path (dir);
+	char *s = xasprintf ("%s  %s%s", what, c, str_has_suffix (c, "/") ? "" : "/");
+	free (c);
+	return s;
+}
+
+/* Choose a location, the current one `cur' (NULL for this machine)
+   preselected. Returns false if cancelled; otherwise `*out' is the machine,
+   connected, or NULL for this machine. A machine that cannot be
+   reached is not chosen: the list is shown again, saying why. */
+static bool
+choose_location (Remote *cur, Remote **out)
+{
+	char *notice = NULL;
+	for (;;) {
+		StrVec texts = { NULL, 0, 0 }, anns = { NULL, 0, 0 };
+		int groups[512];
+		Remote *data[512];
+		int def = 0;
+		sv_push (&texts, "Local");
+		char *local_ann = location_annotation (NULL, cur == NULL ? "current" : "files on this machine");
+		sv_push (&anns, local_ann);
+		free (local_ann);
+		groups[0] = L_LOCAL;
+		data[0] = NULL;
+		for (size_t i = 0; remote_recent (i) != NULL && texts.n < 300; i++) {
+			Remote *r = remote_recent (i);
+			if (r == cur)
+				def = (int) texts.n;
+			groups[texts.n] = L_RECENT;
+			data[texts.n] = r;
+			sv_push (&texts, remote_label (r));
+			char *ann = location_annotation (r, r == cur ? "current" : "this session");
+			sv_push (&anns, ann);
+			free (ann);
+		}
+		for (size_t i = 0; remote_saved (i) != NULL && texts.n < 400; i++) {
+			Remote *r = remote_saved (i);
+			bool seen = false;
+			for (size_t k = 0; k < texts.n && !seen; k++)
+				seen = data[k] == r;
+			if (seen)
+				continue;
+			if (r == cur)
+				def = (int) texts.n;
+			groups[texts.n] = L_SAVED;
+			data[texts.n] = r;
+			sv_push (&texts, remote_label (r));
+			char *ann = location_annotation (r, r == cur ? "current" : "saved");
+			sv_push (&anns, ann);
+			free (ann);
+		}
+		StrVec hosts = { NULL, 0, 0 };
+		remote_config_hosts (&hosts);
+		for (size_t i = 0; i < hosts.n && texts.n < 510; i++) {
+			bool seen = false;
+			for (size_t k = 0; k < texts.n && !seen; k++)
+				seen = groups[k] != L_LOCAL && strcmp (texts.v[k], hosts.v[i]) == 0;
+			if (seen)
+				continue;
+			groups[texts.n] = L_CONFIG;
+			data[texts.n] = NULL;
+			sv_push (&texts, hosts.v[i]);
+			sv_push (&anns, "ssh configuration");
+		}
+		sv_clear (&hosts);
+		free (hosts.v);
+		groups[texts.n] = L_NEW;
+		data[texts.n] = NULL;
+		sv_push (&texts, NEW_CONNECTION);
+		sv_push (&anns, "host name, user and port");
+
+		PickerSpec spec;
+		memset (&spec, 0, sizeof spec);
+		spec.prompt = "Location: ";
+		spec.groups = location_groups;
+		spec.preselect = true;
+		spec.fuzzy_groups = 1u << L_RECENT | 1u << L_SAVED | 1u << L_CONFIG;
+		spec.default_item = def;
+		spec.notice = notice;
+		spec.hints = location_hints;
+		spec.back_key = true;
+		Picker *p = picker_new (&spec);
+		for (size_t i = 0; i < texts.n; i++)
+			picker_add (p, texts.v[i], anns.v[i], groups[i], data[i]);
+		sv_clear (&texts);
+		free (texts.v);
+		sv_clear (&anns);
+		free (anns.v);
+
+		PickerChoice choice;
+		picker_run (p, &choice);
+		free (notice);
+		notice = NULL;
+		Remote *r = NULL;
+		bool local = false, again = false;
+		if (choice.kind == PICK_ITEM) {
+			PickerItem *it = picker_item (p, choice.item);
+			if (it->group == L_LOCAL)
+				local = true;
+			else if (it->group == L_RECENT || it->group == L_SAVED)
+				r = it->data;
+			else if (it->group == L_CONFIG) {
+				r = remote_get (it->text, NULL, NULL);
+				if (r == NULL)
+					notice = xstrdup (remote_last_error ());
+			} else {
+				r = read_new_connection (&notice);
+				again = r == NULL;
+			}
+		} else if (choice.kind == PICK_INPUT && choice.input[0] != '\0') {
+			r = remote_parse (choice.input);
+			if (r == NULL)
+				notice = xstrdup (remote_last_error ());
+		}
+		free (choice.input);
+		picker_free (p);
+
+		if (local) {
+			*out = NULL;
+			return true;
+		}
+		if (r != NULL) {
+			if (remote_connect (r)) {
+				location_note (r, NULL);
+				*out = r;
+				return true;
+			}
+			notice = xstrdup (remote_last_error ());
+		} else if (notice == NULL && !again)
+			return false;
+	}
+}
+
+#define MAX_SAVED 16
+
+typedef struct {
+	Remote *r;
+	char *input;
+} SavedInput;
+
+static void
+save_input (SavedInput *v, size_t *n, Remote *r, const char *input)
+{
+	for (size_t i = 0; i < *n; i++)
+		if (v[i].r == r) {
+			free (v[i].input);
+			v[i].input = xstrdup (input);
+			return;
+		}
+	if (*n < MAX_SAVED) {
+		v[*n].r = r;
+		v[*n].input = xstrdup (input);
+		(*n)++;
+	}
+}
+
+/* The input last used at a location in this dialog (perhaps a
+   partial name), as a new string; or else the directory last browsed
+   there. */
+static char *
+location_input (SavedInput *v, size_t n, Remote *r)
+{
+	for (size_t i = 0; i < n; i++)
+		if (v[i].r == r)
+			return xstrdup (v[i].input);
+	const char *dir = location_dir (r);
+	if (dir != NULL) {
+		char *c = r != NULL ? remote_compact_path (r, dir) : compact_path (dir);
+		char *s = str_has_suffix (c, "/") ? xstrdup (c) : xstrcat3 (c, "/", "");
+		free (c);
+		return s;
+	}
+	if (r != NULL)
+		return xstrdup ("~/");
+	char *cwd = get_current_dir ();
+	char *c = compact_path (cwd);
+	char *s = str_has_suffix (c, "/") ? xstrdup (c) : xstrcat3 (c, "/", "");
+	free (c);
+	free (cwd);
+	return s;
+}
+
+/* Read a file name, starting from `initial' on the machine `*loc'
+   (NULL for this one). M-l chooses another location, where the input
+   is the one last used there in this dialog, or else the directory
+   last browsed there, or else its home directory (here, the current
+   directory); C-g there goes back. Returns the expanded path,
+   with `*loc' its machine, or NULL if cancelled. `hp' is the
+   history of local names, not used for remote ones. */
+char *
+picker_read_location_file (const char *prompt, Remote **loc, const char *initial, History *hp)
+{
+	Remote *cur = *loc;
+	char *input = xstrdup (initial);
+	char *notice = NULL;
+	SavedInput saved[MAX_SAVED];
+	size_t nsaved = 0;
+	PickerChoice choice;
+	for (;;) {
+		char *full = cur != NULL ? xasprintf ("%s[ssh:%s] ", prompt, remote_label (cur))
+			: xasprintf ("%s[Local] ", prompt);
+		PickerSpec spec;
+		memset (&spec, 0, sizeof spec);
+		spec.prompt = full;
+		spec.initial = input;
+		spec.file_mode = true;
+		spec.preselect = true;
+		spec.default_item = -1;
+		spec.history = cur == NULL ? hp : NULL;
+		spec.locations = true;
+		spec.hints = file_hints;
+		spec.remote = cur;
+		spec.notice = notice;
+		Picker *p = picker_new (&spec);
+		picker_run (p, &choice);
+		picker_free (p);
+		free (full);
+		free (notice);
+		notice = NULL;
+		free (input);
+		input = NULL;
+		if (choice.kind != PICK_LOCATION)
+			break;
+
+		save_input (saved, &nsaved, cur, choice.input);
+		Remote *next;
+		if (choose_location (cur, &next)) {
+			input = location_input (saved, nsaved, next);
+			cur = next;
+			free (choice.input);
+			notice = location_take_warning ();
+		} else
+			input = choice.input;
+	}
+	for (size_t i = 0; i < nsaved; i++)
+		free (saved[i].input);
+
+	char *result = NULL;
+	if (choice.kind != PICK_CANCEL) {
+		result = cur != NULL ? remote_expand_path (cur, choice.input) : expand_path (choice.input);
+		if (result == NULL) {
+			if (cur != NULL)
+				minibuf_error ("%s", remote_last_error ());
+			result = xstrdup ("");
+		}
+		*loc = cur;
+	}
+	free (choice.input);
+	if (choice.kind == PICK_CANCEL)
+		funcall ("keyboard-quit");
+	return result;
+}
+
+
 /*--------------------------------------------------------------------------
  * Buffers.
  *--------------------------------------------------------------------------*/
@@ -195,7 +496,11 @@ buffer_annotation (Buffer *bp)
 	sb_init (&sb);
 	sb_addf (&sb, "%-2s  %-16s  ", bp->modified ? "**" : bp->readonly ? "%%" : "",
 		 buffer_mode_name (bp));
-	if (bp->filename != NULL) {
+	char *remote = remote_describe (bp);
+	if (remote != NULL) {
+		sb_add (&sb, remote);
+		free (remote);
+	} else if (bp->filename != NULL) {
 		char *p = compact_path (bp->filename);
 		sb_add (&sb, p);
 		free (p);
@@ -410,7 +715,8 @@ pick_buffer_to_switch (void)
 	spec.default_item = 0;
 	spec.preview = switch_preview;
 	spec.kill = switch_kill;
-	spec.async = project_files;
+	/* Project files are found locally, so not for remote buffers. */
+	spec.async = cur_bp->remote == NULL ? project_files : NULL;
 	spec.accept_async = accept_project_file;
 	spec.data = &st;
 	Picker *p = picker_new (&spec);

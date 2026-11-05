@@ -822,6 +822,8 @@ buffer_free (Buffer *bp)
 	free (bp->syntax_states);
 	free (bp->name);
 	free (bp->filename);
+	free (bp->remote_path);
+	free (bp->remote_sum);
 	free (bp->dir);
 	free (bp);
 }

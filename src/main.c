@@ -52,6 +52,7 @@ zile_exit (int reason)
 	if (reason == EXIT_SUCCESS) {
 		recentf_save ();
 		term_finish ();
+		remote_shutdown ();
 	}
 	else {
 		term_close ();
@@ -68,6 +69,7 @@ zile_exit (int reason)
 			}
 		if (reason == EXIT_COREDUMP)
 			abort ();
+		remote_shutdown ();
 	}
 
 	process_kill_all ();
@@ -410,6 +412,7 @@ main (int argc, char **argv)
 		free (init_file);
 		free (home);
 		recentf_load ();
+		locations_load ();
 	}
 
 	/* Create the splash buffer & message only if no files, function or

@@ -620,6 +620,8 @@ F_shell (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	if (remote_refuse (cur_bp, "shell"))
+		return false;
 	/* Reuse a running shell. */
 	Buffer *bp = buffer_find ("*shell*");
 	if (bp != NULL && shell_process_alive (bp)) {
@@ -643,6 +645,8 @@ static bool
 F_term (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "term"))
+		return false;
 	char *program = xstrdup_or_null (args_poll (args));
 	if (program == NULL) {
 		char *shell = user_shell ();

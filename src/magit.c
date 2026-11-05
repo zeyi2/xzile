@@ -1604,6 +1604,8 @@ current_root (void)
 {
 	if (cur_bp->magit != NULL)
 		return xstrdup (cur_bp->magit->root);
+	if (remote_refuse (cur_bp, "Magit"))
+		return NULL;
 	char *root = repository_root (cur_bp->dir);
 	if (root == NULL)
 		minibuf_error ("Not inside a Git repository");
@@ -1682,6 +1684,8 @@ F_magit_status (long uniarg, Args *args)
 {
 	(void) uniarg;
 	char *dir = xstrdup_or_null (args_poll (args));
+	if (dir == NULL && remote_refuse (cur_bp, "magit-status"))
+		return false;
 	char *root = repository_root (dir != NULL ? dir : cur_bp->dir);
 	free (dir);
 	if (root == NULL) {

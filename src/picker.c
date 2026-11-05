@@ -28,7 +28,9 @@
    RET with no selection uses the input as typed; C-j always does.
 
    In file mode the input is a path: the candidates are the entries of
-   its directory, matched against its last component. */
+   its directory, matched against its last component. The directory is
+   on the spec's remote machine if there is one; M-l, if the spec
+   allows, returns to ask for another location. */
 
 #include "xzile.h"
 
@@ -71,6 +73,8 @@ struct Picker {
 
 	/* File mode. */
 	char *dir;		/* The directory listed, as typed (e.g. "~/src/"). */
+	char *list_error;	/* Why that directory could not be listed. */
+	char *notice;		/* From the spec, until a key is typed. */
 };
 
 /*--------------------------------------------------------------------------
@@ -86,6 +90,7 @@ picker_new (const PickerSpec *spec)
 	sb_init (&p->input);
 	p->selected = -1;
 	p->previewed = -1;
+	p->notice = xstrdup_or_null (spec->notice);
 	return p;
 }
 
@@ -185,6 +190,8 @@ picker_free (Picker *p)
 	free (p->scores);
 	sb_free (&p->input);
 	free (p->dir);
+	free (p->list_error);
+	free (p->notice);
 	pthread_mutex_destroy (&p->lock);
 	free (p);
 }
@@ -463,11 +470,16 @@ filter (Picker *p)
 			p->selected = 0;
 		return;
 	}
+	/* Groups come before scores: an exact match may not be first. */
+	for (size_t i = 0; i < p->nmatches; i++)
+		if (strcmp (p->items[p->matches[i]].text, qs) == 0) {
+			p->selected = (int) i;
+			return;
+		}
 	const PickerItem *first = &p->items[p->matches[0]];
-	bool exact = strcmp (first->text, qs) == 0;
 	bool fuzzy_ok = p->spec.require_match ||
 		(p->spec.fuzzy_groups != 0 && (p->spec.fuzzy_groups & (1u << first->group)));
-	if (exact || (p->spec.preselect && (fuzzy_ok || strong_match (first->text, &q))))
+	if (p->spec.preselect && (fuzzy_ok || strong_match (first->text, &q)))
 		p->selected = 0;
 }
 
@@ -490,8 +502,32 @@ load_directory (Picker *p)
 	for (size_t i = 0; i < p->nitems; i++)
 		item_free (&p->items[i]);
 	p->nitems = 0;
+	free (p->list_error);
+	p->list_error = NULL;
 
-	char *path = expand_path (dlen > 0 ? p->dir : "./");
+	if (p->spec.remote != NULL) {
+		/* Never the local directory of the same name. */
+		char *rpath = remote_expand_path (p->spec.remote, dlen > 0 ? p->dir : "~/");
+		RemoteEntry *v = NULL;
+		size_t n = 0;
+		if (rpath != NULL && remote_list (p->spec.remote, rpath, false, &v, &n)) {
+			for (size_t i = 0; i < n; i++) {
+				if (strcmp (v[i].name, ".") == 0 || strcmp (v[i].name, "..") == 0)
+					continue;
+				if (v[i].dir) {
+					char *s = xstrcat3 (v[i].name, "/", "");
+					picker_add (p, s, NULL, 0, NULL);
+					free (s);
+				} else
+					picker_add (p, v[i].name, NULL, 1, NULL);
+			}
+		} else
+			p->list_error = xstrdup (remote_last_error ());
+		remote_entries_free (v, n);
+		free (rpath);
+	}
+
+	char *path = p->spec.remote == NULL ? expand_path (dlen > 0 ? p->dir : "./") : NULL;
 	DIR *d = path != NULL ? opendir (path) : NULL;
 	if (d != NULL) {
 		struct dirent *e;
@@ -633,10 +669,30 @@ draw (Picker *p)
 		start = utf8_next_char (p->input.s, p->input.len, start);
 	add_text (p->input.s + start, NULL, avail, FACE_DEFAULT);
 	bool show_new = !p->spec.require_match && p->selected < 0 && p->input.len > 0 && !p->spec.file_mode;
-	if (show_new) {
+	const char *message = p->list_error != NULL ? p->list_error : p->notice;
+	if (message != NULL) {
+		char *hint = xasprintf ("  [%s]", message);
+		size_t used = prompt_w + display_width (p->input.s + start, p->input.len - start);
+		size_t room = width > used + 2 ? width - used - 2 : 0;
+		room = MAX (room, MIN (width / 2, (size_t) 40));
+		size_t hw = MIN (display_width (hint, strlen (hint)), room);
+		if (width > hw + 1) {
+			term_move (first_row, width - hw - 1);
+			add_text (hint, NULL, hw, FACE_ERROR);
+		}
+		free (hint);
+	} else if (show_new || p->spec.hints != NULL) {
 		const char *hint = "  [RET: use input]";
+		if (!show_new) {
+			/* The longest that does not hide the input, if any. */
+			size_t used = prompt_w + display_width (p->input.s + start, p->input.len - start) + 1;
+			size_t k = 0;
+			while (p->spec.hints[k] != NULL && used + strlen (p->spec.hints[k]) + 1 > width)
+				k++;
+			hint = p->spec.hints[k] != NULL ? p->spec.hints[k] : "";
+		}
 		size_t hw = strlen (hint);
-		if (width > hw) {
+		if (hw > 0 && width > hw) {
 			term_move (first_row, width - hw - 1);
 			term_apply_face (FACE_PICKER_ANNOTATION);
 			term_addstr (hint);
@@ -822,11 +878,22 @@ picker_run (Picker *p, PickerChoice *choice)
 		}
 		if (merge_pending (p))
 			dirty = true;
+		free (p->notice);
+		p->notice = NULL;
 
 		const PickerItem *sel = p->selected >= 0 ? &p->items[p->matches[p->selected]] : NULL;
 		switch (key) {
 		case KBD_CANCEL:
 			goto done;
+		case KBD_META | 'l':
+			if (p->spec.locations) {
+				choice->kind = PICK_LOCATION;
+				goto done;
+			}
+			if (p->spec.back_key)
+				goto done;
+			ding ();
+			break;
 		case KBD_RET:
 			if (sel != NULL) {
 				choice->kind = PICK_ITEM;

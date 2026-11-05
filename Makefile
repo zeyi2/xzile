@@ -84,6 +84,7 @@ CORE_OBJS = \
 	src/redisplay.o \
 	src/regex.o \
 	src/registers.o \
+	src/remote.o \
 	src/screen.o \
 	src/search.o \
 	src/selectors.o \

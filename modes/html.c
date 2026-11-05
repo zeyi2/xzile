@@ -332,6 +332,8 @@ F_html_preview (long uniarg, Args *args)
 	(void) uniarg;
 	(void) args;
 	Buffer *bp = cur_bp;
+	if (remote_refuse (bp, "html-preview"))
+		return false;
 	if (bp->filename == NULL || bp->needname) {
 		minibuf_error ("Buffer is not visiting a file; save it first");
 		return false;

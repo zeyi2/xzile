@@ -393,6 +393,8 @@ bool
 preview_enter (enum PreviewKind kind)
 {
 	const char *what = kind_label (kind);
+	if (remote_refuse (cur_bp, "Previewing"))
+		return false;
 	if (preview_backend == NULL) {
 		minibuf_error ("%s previews need the graphical xzile-gui", what);
 		return false;
@@ -598,6 +600,8 @@ F_preview_toggle_display (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	if (remote_refuse (cur_bp, "preview-toggle-display"))
+		return false;
 	if (preview_showing (cur_bp)) {
 		if (cur_bp->preview->binary) {
 			minibuf_error ("%s is binary and has no text view; "

@@ -1,0 +1,6 @@
+refused dired-do-rename in proj
+refused dired-do-copy in proj
+refused dired-do-delete in proj
+refused dired-do-flagged-delete in proj
+refused dired-do-chmod in proj
+refused dired-create-directory in proj

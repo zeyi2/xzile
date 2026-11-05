@@ -173,7 +173,8 @@ buffer_note_disk (Buffer *bp)
 static bool
 buffer_disk_changed (Buffer *bp)
 {
-	if (bp->filename == NULL || bp->needname || !bp->disk.known)
+	/* Remote files are only checked when saved. */
+	if (bp->filename == NULL || bp->remote != NULL || bp->needname || !bp->disk.known)
 		return false;
 	FileStamp now = file_stamp (bp->filename);
 	return now.known &&
@@ -187,15 +188,11 @@ buffer_byte (EstrView pre, EstrView post, size_t i)
 	return i < pre.len ? pre.text[i] : post.text[i - pre.len];
 }
 
-/* Read the visited file and find the part of it that differs from the
-   buffer: everything but the first `*prefix' and last `*suffix' bytes.
-   Returns NULL if the file cannot be read. */
-static Estr *
-read_disk_diff (Buffer *bp, size_t *prefix, size_t *suffix)
+/* Find the part of `es' that differs from the buffer: everything but
+   the first `*prefix' and last `*suffix' bytes. */
+static void
+text_diff (Buffer *bp, Estr *es, size_t *prefix, size_t *suffix)
 {
-	Estr *es = estr_from_file (bp->filename);
-	if (es == NULL)
-		return NULL;
 	EstrView nv = estr_view (es);
 	EstrView pre = buffer_pre_point (bp), post = buffer_post_point (bp);
 	size_t len = pre.len + post.len, p = 0, s = 0;
@@ -208,6 +205,16 @@ read_disk_diff (Buffer *bp, size_t *prefix, size_t *suffix)
 	}
 	*prefix = p;
 	*suffix = s;
+}
+
+/* Read the visited file and find the part of it that differs from the
+   buffer. Returns NULL if the file cannot be read. */
+static Estr *
+read_disk_diff (Buffer *bp, size_t *prefix, size_t *suffix)
+{
+	Estr *es = estr_from_file (bp->filename);
+	if (es != NULL)
+		text_diff (bp, es, prefix, suffix);
 	return es;
 }
 
@@ -223,16 +230,14 @@ buffer_matches_disk (Buffer *bp)
 	return same;
 }
 
-/* Replace the buffer text with the visited file, changing only the
-   part that differs so that point, the mark and other windows stay
-   where they were. */
-static bool
-revert_from_disk (Buffer *bp)
+/* Replace the buffer text with `es', changing only the part that
+   differs so that point, the mark and other windows stay where they
+   were. */
+static void
+revert_to_text (Buffer *bp, Estr *es)
 {
 	size_t p, s;
-	Estr *es = read_disk_diff (bp, &p, &s);
-	if (es == NULL)
-		return false;
+	text_diff (bp, es, &p, &s);
 	EstrView nv = estr_view (es);
 	size_t len = buffer_length (bp);
 	if (p < len || p < nv.len) {
@@ -250,8 +255,17 @@ revert_from_disk (Buffer *bp)
 		undo_free_all (bp);
 		thisflag |= FLAG_NEED_RESYNC;
 	}
-	estr_free (es);
 	bp->modified = false;
+}
+
+static bool
+revert_from_disk (Buffer *bp)
+{
+	Estr *es = estr_from_file (bp->filename);
+	if (es == NULL)
+		return false;
+	revert_to_text (bp, es);
+	estr_free (es);
 	buffer_note_disk (bp);
 	return true;
 }
@@ -343,6 +357,70 @@ find_file (const char *filename)
 	if (bp->filename != NULL)
 		recentf_add (bp->filename);
 	thisflag |= FLAG_NEED_RESYNC;
+	return true;
+}
+
+static Estr *
+estr_from_strbuf (StrBuf *sb)
+{
+	Estr *es = xzalloc (sizeof (Estr));
+	es->len = sb->len;
+	es->text = sb_take (sb);
+	es->buf_size = es->len;
+	estr_set_eol_from_text (es);
+	return es;
+}
+
+/* Visit the file or directory `path' (absolute) on `r'. A failure
+   leaves everything as it was: nothing local is used instead. */
+bool
+find_file_remote (Remote *r, const char *path)
+{
+	Buffer *bp;
+	for (bp = head_bp; bp != NULL; bp = bp->next)
+		if (bp->remote == r && bp->remote_path != NULL && strcmp (bp->remote_path, path) == 0)
+			break;
+
+	if (bp == NULL) {
+		StrBuf content;
+		sb_init (&content);
+		bool writable = true;
+		enum RemoteKind kind = remote_read (r, path, &content, &writable);
+		if (kind == REMOTE_ERROR || kind == REMOTE_DIR) {
+			sb_free (&content);
+			if (kind == REMOTE_DIR)
+				return dired_remote (r, path);
+			minibuf_error ("%s", remote_last_error ());
+			return false;
+		}
+
+		char *sum = NULL;
+		if (kind == REMOTE_FILE) {
+			sum = remote_checksum (content.s, content.len);
+			bp = buffer_new (estr_from_strbuf (&content));
+			bp->readonly = !writable;
+		} else {
+			sb_free (&content);
+			bp = buffer_new (NULL);
+		}
+		bp->remote = r;
+		bp->remote_path = xstrdup (path);
+		bp->remote_sum = sum;
+		char *base = path_basename (path);
+		bp->name = buffer_unique_name (base);
+		free (base);
+		buffer_set_highlighter (bp, filetype_resolve_highlighter (path));
+		undo_free_all (bp);
+		bp->modified = false;
+		if (kind == REMOTE_MISSING)
+			minibuf_write ("(New file on ssh:%s)", remote_label (r));
+	}
+
+	buffer_switch_to (bp, true);
+	thisflag |= FLAG_NEED_RESYNC;
+	char *dir = path_dirname (path);
+	location_note (r, dir);
+	free (dir);
 	return true;
 }
 
@@ -624,11 +702,73 @@ write_buffer (Buffer *bp, bool needname, bool confirm, const char *name0, const 
 	return ok;
 }
 
+/* Save a remote buffer. The file is written only if it is as it was
+   when last read or written (or the user agrees), and the buffer is
+   marked unmodified only once the remote side has confirmed what it
+   wrote. */
+static bool
+save_remote (Buffer *bp)
+{
+	StrBuf data;
+	sb_init (&data);
+	EstrView pre = buffer_pre_point (bp), post = buffer_post_point (bp);
+	sb_addn (&data, pre.text, pre.len);
+	sb_addn (&data, post.text, post.len);
+	if (!buffer_has_final_eol (bp))
+		sb_add (&data, buffer_eol (bp));
+	char *want = remote_checksum (data.s, data.len);
+	char *shown = remote_describe (bp);
+
+	bool backup = !bp->backup && get_variable_bool ("make-backup-files");
+	char *sum = NULL;
+	bool backed_up = false;
+	enum RemoteWrite rw = remote_write (bp->remote, bp->remote_path, bp->remote_sum, backup,
+					    data.s, data.len, &sum, &backed_up);
+	bool ok = false;
+	if (rw == REMOTE_WRITE_CONFLICT) {
+		int ans = 1;
+		if (sum == NULL || strcmp (sum, want) != 0) {
+			ans = minibuf_read_yesno ("%s has changed on ssh:%s since visited or saved.  Save anyway? (yes or no) ",
+						  bp->name, remote_label (bp->remote));
+			if (ans < 0)
+				funcall ("keyboard-quit");
+			else if (ans == 0)
+				minibuf_error ("Save not confirmed");
+		}
+		free (sum);
+		sum = NULL;
+		if (ans == 1)
+			rw = remote_write (bp->remote, bp->remote_path, "*", backup, data.s, data.len, &sum, &backed_up);
+	}
+	if (rw == REMOTE_WRITE_OK) {
+		if (sum != NULL && strcmp (sum, want) == 0) {
+			ensure_buffer_final_eol (bp);
+			bp->modified = false;
+			free (bp->remote_sum);
+			bp->remote_sum = sum;
+			sum = NULL;
+			if (backed_up)
+				bp->backup = true;
+			undo_set_unchanged (bp->last_undop);
+			minibuf_write ("Wrote %s", shown);
+			ok = true;
+		} else
+			minibuf_error ("Writing %s: the remote file does not match the buffer, which is still modified", shown);
+	} else if (rw == REMOTE_WRITE_ERROR)
+		minibuf_error ("%s", remote_last_error ());
+	free (sum);
+	free (want);
+	free (shown);
+	sb_free (&data);
+	return ok;
+}
+
 static bool
 save_buffer (Buffer *bp)
 {
 	if (bp->modified)
-		return write_buffer (bp, bp->needname, false, bp->filename, "File to save in: ");
+		return bp->remote != NULL ? save_remote (bp)
+			: write_buffer (bp, bp->needname, false, bp->filename, "File to save in: ");
 
 	minibuf_write ("(No changes need to be saved)");
 	return true;
@@ -639,9 +779,14 @@ F_find_file (long uniarg, Args *args)
 {
 	(void) uniarg;
 	bool ok = true;
+	Remote *loc = NULL;
 	char *filename = xstrdup_or_null (args_poll (args));
-	if (filename == NULL) {
-		filename = minibuf_read_file_to_visit ("Find file: ", cur_bp->dir, NULL);
+	bool asked = filename == NULL;
+	if (asked) {
+		loc = cur_bp->remote;
+		char *dir = remote_buffer_dir (cur_bp);
+		filename = minibuf_read_location_file ("Find file: ", &loc, dir != NULL ? dir : cur_bp->dir, NULL);
+		free (dir);
 		if (filename == NULL)
 			ok = funcall ("keyboard-quit");
 	}
@@ -649,7 +794,9 @@ F_find_file (long uniarg, Args *args)
 		ok = false;
 
 	if (ok)
-		ok = find_file (filename);
+		ok = loc != NULL ? find_file_remote (loc, filename) : find_file (filename);
+	if (ok && asked && loc == NULL)
+		location_note (NULL, cur_bp->dir);
 
 	free (filename);
 	return ok;
@@ -669,22 +816,33 @@ F_find_alternate_file (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
-	const char *buf = cur_bp->filename;
-	char *basename = NULL;
-
-	if (buf == NULL)
-		buf = cur_bp->dir;
-	else
-		basename = path_basename (buf);
-	char *ms = minibuf_read_file_to_visit ("Find alternate: ", buf, basename);
-	free (basename);
+	Remote *loc = cur_bp->remote;
+	char *dir = remote_buffer_dir (cur_bp);
+	const char *file = loc != NULL ? cur_bp->remote_path : cur_bp->filename;
+	char *ms = minibuf_read_location_file ("Find alternate: ", &loc, dir != NULL ? dir : cur_bp->dir, file);
+	free (dir);
 
 	bool ok = false;
 	if (ms == NULL)
 		ok = funcall ("keyboard-quit");
 	else if (ms[0] != '\0' && buffer_check_modified (cur_bp)) {
-		buffer_kill (cur_bp);
-		ok = find_file (ms);
+		if (loc == NULL) {
+			buffer_kill (cur_bp);
+			ok = find_file (ms);
+			if (ok)
+				location_note (NULL, cur_bp->dir);
+		} else if (cur_bp->remote == loc && cur_bp->remote_path != NULL &&
+			   strcmp (cur_bp->remote_path, ms) == 0) {
+			buffer_kill (cur_bp);
+			ok = find_file_remote (loc, ms);
+		} else {
+			/* The old buffer goes only once the new one could be
+			   read: a remote failure must not lose it. */
+			Buffer *old = cur_bp;
+			ok = find_file_remote (loc, ms);
+			if (ok && cur_bp != old && buffer_is_live (old))
+				buffer_kill (old);
+		}
 	}
 	free (ms);
 	return ok;
@@ -698,9 +856,14 @@ F_insert_file (long uniarg, Args *args)
 		return false;
 
 	bool ok = true;
+	Remote *loc = NULL;
 	char *file = xstrdup_or_null (args_poll (args));
-	if (file == NULL) {
-		file = minibuf_read_file_to_visit ("Insert file: ", cur_bp->dir, NULL);
+	bool asked = file == NULL;
+	if (asked) {
+		loc = cur_bp->remote;
+		char *dir = remote_buffer_dir (cur_bp);
+		file = minibuf_read_location_file ("Insert file: ", &loc, dir != NULL ? dir : cur_bp->dir, NULL);
+		free (dir);
 		if (file == NULL)
 			ok = funcall ("keyboard-quit");
 	}
@@ -708,7 +871,29 @@ F_insert_file (long uniarg, Args *args)
 	if (file == NULL || file[0] == '\0')
 		ok = false;
 
-	if (ok) {
+	if (ok && loc != NULL) {
+		StrBuf content;
+		sb_init (&content);
+		bool writable;
+		enum RemoteKind kind = remote_read (loc, file, &content, &writable);
+		if (kind == REMOTE_FILE) {
+			Estr *es = estr_from_strbuf (&content);
+			buffer_insert_estr (cur_bp, estr_view (es));
+			estr_free (es);
+			funcall ("set-mark-command");
+			char *dir = path_dirname (file);
+			location_note (loc, dir);
+			free (dir);
+		} else {
+			sb_free (&content);
+			if (kind == REMOTE_ERROR)
+				minibuf_error ("%s", remote_last_error ());
+			else
+				minibuf_error ("%s on ssh:%s is %s", file, remote_label (loc),
+					       kind == REMOTE_DIR ? "a directory" : "not there");
+			ok = false;
+		}
+	} else if (ok) {
 		Estr *es = estr_from_file (file);
 		if (es == NULL) {
 			minibuf_error ("%s: %s", file, strerror (errno));
@@ -717,6 +902,11 @@ F_insert_file (long uniarg, Args *args)
 			buffer_insert_estr (cur_bp, estr_view (es));
 			estr_free (es);
 			funcall ("set-mark-command");
+			if (asked) {
+				char *dir = path_dirname (file);
+				location_note (NULL, dir);
+				free (dir);
+			}
 		}
 	}
 	free (file);
@@ -735,6 +925,8 @@ static bool
 F_write_file (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "write-file"))
+		return false;
 	return write_buffer (cur_bp, true, noarg (args), NULL, "Write file: ");
 }
 
@@ -747,7 +939,8 @@ F_save_some_buffers (long uniarg, Args *args)
 
 	for (Buffer *bp = head_bp; bp != NULL; bp = bp->next) {
 		if (bp->modified && !bp->nosave) {
-			const char *fname = buffer_get_filename_or_name (bp);
+			char *shown = remote_describe (bp);
+			const char *fname = shown != NULL ? shown : buffer_get_filename_or_name (bp);
 			if (noask)
 				save_buffer (bp);
 			else
@@ -757,11 +950,14 @@ F_save_some_buffers (long uniarg, Args *args)
 					minibuf_clear ();
 
 					if (c == KBD_CANCEL) {	/* C-g */
+						free (shown);
 						funcall ("keyboard-quit");
 						return false;
 					} else if (c == 'q') {
+						free (shown);
 						return true;
 					} else if (c == '.') {
+						free (shown);
 						save_buffer (bp);
 						return true;
 					} else if (c == '!') {
@@ -778,6 +974,7 @@ F_save_some_buffers (long uniarg, Args *args)
 						waitkey ();
 					}
 				}
+			free (shown);
 		}
 	}
 
@@ -818,6 +1015,8 @@ static bool
 F_cd (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "cd"))
+		return false;
 	bool ok = true;
 	char *dir = xstrdup_or_null (args_poll (args));
 	if (dir == NULL)
@@ -843,11 +1042,49 @@ F_cd (long uniarg, Args *args)
 	return ok;
 }
 
+/* Revert a remote buffer from its file. */
+static bool
+revert_remote (Buffer *bp)
+{
+	StrBuf content;
+	sb_init (&content);
+	bool writable = true;
+	enum RemoteKind kind = remote_read (bp->remote, bp->remote_path, &content, &writable);
+	if (kind != REMOTE_FILE) {
+		sb_free (&content);
+		if (kind == REMOTE_ERROR)
+			minibuf_error ("%s", remote_last_error ());
+		else
+			minibuf_error ("%s on ssh:%s is %s", bp->remote_path, remote_label (bp->remote),
+				       kind == REMOTE_DIR ? "now a directory" : "not there");
+		return false;
+	}
+	char *sum = remote_checksum (content.s, content.len);
+	Estr *es = estr_from_strbuf (&content);
+	revert_to_text (bp, es);
+	estr_free (es);
+	undo_free_all (bp);
+	free (bp->remote_sum);
+	bp->remote_sum = sum;
+	bp->readonly = !writable;
+	return true;
+}
+
 static bool
 F_revert_buffer (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	if (cur_bp->remote != NULL && cur_bp->remote_path != NULL) {
+		char *shown = remote_describe (cur_bp);
+		int ans = minibuf_read_yesno ("Revert buffer from file %s? (yes or no) ", shown);
+		free (shown);
+		if (ans < 0) {
+			funcall ("keyboard-quit");
+			return false;
+		}
+		return ans > 0 && revert_remote (cur_bp);
+	}
 	if (cur_bp->filename == NULL) {
 		minibuf_error ("Buffer does not seem to be associated with any file");
 		return false;

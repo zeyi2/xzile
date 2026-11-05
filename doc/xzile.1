@@ -22,6 +22,18 @@ In \fBhtml-mode\fR, \fBhtml-preview\fR (C-c C-v) shows the file in a
 browser engine window:
 .B xzile-html-preview
 on Linux, or the default browser.
+.PP
+In the file picker of \fBfind-file\fR (C-x C-f) and \fBdired\fR (C-x d),
+M-l chooses a location: this machine, or another reached with
+.BR ssh (1)
+(an alias from \fI~/.ssh/config\fR, a recent or saved connection, or
+a new host, user and port); the prompt names it.
+Remote text files can be visited, created, saved and reverted, and
+remote directories browsed in Dired; commands that would change files
+from Dired or run programs are refused in remote buffers.
+ssh runs with BatchMode=yes, so keys or an agent are needed and host
+keys are checked; \fBremote-timeout\fR bounds each operation, C-g
+cancels it, and \fBssh-config-file\fR chooses the ssh configuration.
 .SS "Initialization options:"
 .TP
 \fB\-\-no\-init\-file\fR, \fB\-q\fR
@@ -70,6 +82,14 @@ Debug categories and log file, as for the debug options.
 .PP
 /usr/local/share/doc/xzile/dotzile.sample \(em which contains some useful
 code for the init file.
+.PP
+~/.ssh/config \(em ssh configuration, whose Host aliases are offered as
+remote locations.
+.PP
+~/.xzile.d/locations \(em connections that worked, and the directory
+last browsed on each machine; private, replaced atomically under an
+fcntl lock on ~/.xzile.d/locations.lock, and not used with \fB\-q\fR.
+See README.md for its format.
 .SH AUTHOR
 Zile was written by Sandro Sigala, David A. Capello and Reuben Thomas.
 The Lisp interpreter is based on code by Scott Lawrence.

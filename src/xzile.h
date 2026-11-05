@@ -541,6 +541,7 @@ typedef struct Preview Preview;
 typedef struct Html Html;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
+typedef struct Remote Remote;
 
 typedef struct Marker {
 	struct Marker *next;	/* Used to chain all markers in the buffer. */
@@ -595,7 +596,14 @@ struct Buffer {
 	bool autofill;		/* The buffer is in Auto Fill mode. */
 	bool isearch;		/* The buffer is in Isearch loop. */
 	bool mark_active;	/* The mark is active. */
-	char *dir;		/* The default directory. */
+	char *dir;		/* The default directory (always local). */
+	/* A remote buffer visits a file or directory on another machine;
+	   its `filename' is then NULL, so it is never taken for a local
+	   file. */
+	Remote *remote;		/* The machine, or NULL. */
+	char *remote_path;	/* The remote file visited, or NULL. */
+	char *remote_sum;	/* Its checksum when last read or written,
+				   or NULL if it did not exist. */
 
 	Binding *keymap;	/* Buffer-local key bindings, or NULL. */
 	Dired *dired;		/* Directory editor state, or NULL. */
@@ -867,6 +875,7 @@ char *minibuf_read (const char *fmt, const char *value, ...) PRINTF_LIKE (1, 3);
 long minibuf_read_number (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_filename (const char *fmt, const char *value, const char *file, ...) PRINTF_LIKE (1, 4);
 char *minibuf_read_file_to_visit (const char *fmt, const char *value, const char *file, ...) PRINTF_LIKE (1, 4);
+char *minibuf_read_location_file (const char *prompt, Remote **loc, const char *dir, const char *file);
 int minibuf_read_yesno (const char *fmt, ...) PRINTF_LIKE (1, 2);
 int minibuf_read_y_or_n (const char *fmt, ...) PRINTF_LIKE (1, 2);
 char *minibuf_read_completion (const char *fmt, const char *val, Completion *cp, History *hp, ...) PRINTF_LIKE (1, 5);
@@ -904,6 +913,11 @@ typedef struct {
 	unsigned fuzzy_groups;		/* Groups whose fuzzy matches are preselected too. */
 	bool file_mode;			/* The input is a path; list its directory. */
 	bool other_window;		/* C-o chooses for the other window. */
+	bool locations;			/* File mode: M-l asks for another location. */
+	Remote *remote;			/* File mode: the machine listed, or NULL. */
+	const char *notice;		/* Shown on the prompt line, e.g. an error. */
+	const char *const *hints;	/* Key hints, longest first; NULL-terminated. */
+	bool back_key;			/* M-l cancels, as C-g does. */
 	int default_item;		/* Selected with empty input, or -1. */
 	History *history;
 	/* Called when the selection changes. */
@@ -917,7 +931,8 @@ typedef struct {
 	void *data;
 } PickerSpec;
 
-enum PickerResult { PICK_CANCEL, PICK_ITEM, PICK_INPUT };
+/* PICK_LOCATION: M-l was typed (the input is kept in `input'). */
+enum PickerResult { PICK_CANCEL, PICK_ITEM, PICK_INPUT, PICK_LOCATION };
 
 typedef struct {
 	enum PickerResult kind;
@@ -936,6 +951,7 @@ void picker_free (Picker *p);
 char *picker_read_name (const char *prompt, StrVec *names, StrVec *annotations,
 			History *hp, bool require_match, int default_item);
 char *picker_read_file (const char *prompt, const char *initial, History *hp, bool visit);
+char *picker_read_location_file (const char *prompt, Remote **loc, const char *initial, History *hp);
 void recentf_add (const char *path);
 void recentf_load (void);
 void recentf_save (void);
@@ -1028,6 +1044,7 @@ void killring_init (void);
 char *expand_path (const char *path);
 char *compact_path (const char *path);
 bool find_file (const char *filename);
+bool find_file_remote (Remote *r, const char *path);
 void buffer_note_disk (Buffer *bp);
 bool buffers_check_disk (bool all);
 int write_to_disk (Buffer *bp, const char *filename, mode_t mode);
@@ -1055,8 +1072,51 @@ void magit_init (void);
 
 /* dired.c */
 bool dired (const char *dir);
+bool dired_remote (Remote *r, const char *dir);
+const char *dired_directory (const Buffer *bp);
 void dired_free (Buffer *bp);
 void dired_init (void);
+
+/* remote.c: files on other machines, through OpenSSH. Operations
+   return false (or REMOTE_ERROR) with remote_last_error set. */
+enum RemoteKind { REMOTE_ERROR, REMOTE_MISSING, REMOTE_FILE, REMOTE_DIR };
+enum RemoteWrite { REMOTE_WRITE_OK, REMOTE_WRITE_CONFLICT, REMOTE_WRITE_ERROR };
+
+#define REMOTE_INFO_FIELDS 6
+typedef struct {
+	char *name;
+	bool dir;		/* A directory, or a link to one. */
+	/* As ls shows them: mode, links, owner, group, size and date;
+	   NULL if not known. */
+	char *info[REMOTE_INFO_FIELDS];
+	char *link;		/* The target of a symbolic link, or NULL. */
+} RemoteEntry;
+
+Remote *remote_get (const char *host, const char *user, const char *port);
+Remote *remote_parse (const char *spec);
+const char *remote_label (const Remote *r);
+Remote *remote_recent (size_t i);
+void remote_config_hosts (StrVec *out);
+const char *remote_last_error (void);
+bool remote_last_cancelled (void);
+bool remote_connect (Remote *r);
+char *remote_expand_path (Remote *r, const char *path);
+char *remote_compact_path (Remote *r, const char *path);
+char *remote_checksum (const char *data, size_t len);
+enum RemoteKind remote_read (Remote *r, const char *path, StrBuf *content, bool *writable);
+enum RemoteWrite remote_write (Remote *r, const char *path, const char *expect, bool backup,
+			       const char *data, size_t len, char **sum, bool *backed_up);
+bool remote_list (Remote *r, const char *dir, bool details, RemoteEntry **out, size_t *n);
+void remote_entries_free (RemoteEntry *v, size_t n);
+char *remote_describe (const Buffer *bp);
+char *remote_buffer_dir (const Buffer *bp);
+bool remote_refuse (const Buffer *bp, const char *what);
+void remote_shutdown (void);
+void locations_load (void);
+void location_note (Remote *r, const char *dir);
+char *location_take_warning (void);
+const char *location_dir (const Remote *r);
+Remote *remote_saved (size_t i);
 
 /*--------------------------------------------------------------------------
  * Image, PDF and HTML modes (modes/).

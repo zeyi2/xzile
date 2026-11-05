@@ -66,6 +66,23 @@ GNU Zile NEWS                                         -*- outline -*-
   (and parsed in parallel), operations on thousands of files take one
   git command, and very large sections start collapsed.
 
+  Remote files: in the file picker of C-x C-f and C-x d, M-l chooses a
+  location, Local or a machine reached with the system's OpenSSH (an
+  ssh configuration alias, a recent connection, or a new host, user
+  and port). Remote buffers can be visited, created, saved and
+  reverted, and remote directories browsed in Dired; changing files
+  from Dired, shells, compilation, Magit and previews are refused
+  there. Saving checks that the remote file has not changed since it
+  was read, and keeps the buffer modified unless the write is
+  confirmed. ssh runs in batch mode, so it never asks for passwords
+  and never skips host key checks. Operations can be cancelled with
+  C-g and time out after remote-timeout seconds; ssh-config-file
+  chooses the ssh configuration. The prompt names the location
+  ([Local] or [ssh:host]) and shows the picker's keys as space allows.
+  Connections that worked and the directory last browsed on each
+  machine are kept in ~/.xzile.d/locations (not with -q), and offered
+  again after a restart.
+
   C-x LEFT (previous-buffer) and C-x RIGHT (next-buffer) work like a
   browser's back and forward, for each window separately: LEFT goes
   back to the buffer the window showed before, at the place it was

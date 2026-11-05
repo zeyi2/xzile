@@ -636,6 +636,8 @@ static bool
 F_compile (long uniarg, Args *args)
 {
 	(void) uniarg;
+	if (remote_refuse (cur_bp, "compile"))
+		return false;
 	char *command = xstrdup_or_null (args_poll (args));
 	if (command == NULL) {
 		command = minibuf_read ("Compile command: ", last_compile_command != NULL ? last_compile_command : DEFAULT_COMPILE_COMMAND);
@@ -658,6 +660,8 @@ F_recompile (long uniarg, Args *args)
 {
 	(void) uniarg;
 	(void) args;
+	if (remote_refuse (cur_bp, "recompile"))
+		return false;
 	Buffer *bp = error_buffer ();
 	if (bp != NULL && bp->compilation != NULL) {
 		char *command = xstrdup (bp->compilation->command);

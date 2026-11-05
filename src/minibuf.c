@@ -181,6 +181,36 @@ vread_filename (bool visit, const char *fmt, const char *value, const char *file
 }
 
 /*
+ * Read the name of a file to visit, here or on another machine: M-l in
+ * the picker chooses. `*loc' is the machine to start on (NULL for this
+ * one), and becomes that of the name. Starts in `dir', or with `file'
+ * (a path) if not NULL. Returns NULL if cancelled.
+ */
+char *
+minibuf_read_location_file (const char *prompt, Remote **loc, const char *dir, const char *file)
+{
+	char *initial;
+	if (*loc == NULL) {
+		char *ea = expand_path (file != NULL ? file : dir);
+		if (ea == NULL)
+			return NULL;
+		initial = compact_path (ea);
+		free (ea);
+	} else
+		initial = remote_compact_path (*loc, file != NULL ? file : dir);
+	if (file == NULL && !str_has_suffix (initial, "/")) {
+		char *t = xstrcat3 (initial, "/", "");
+		free (initial);
+		initial = t;
+	}
+	char *p = picker_read_location_file (prompt, loc, initial, files_history);
+	free (initial);
+	if (p != NULL && *loc == NULL)
+		history_add_element (files_history, p);
+	return p;
+}
+
+/*
  * Read a filename from the minibuffer, for a name that may be new.
  */
 char *

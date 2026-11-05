@@ -1,0 +1,4 @@
+ssh xzbadkey: authentication failed; XZile does not ask for passwords: load your key into ssh-agent (ssh-add), or set IdentityFile for the host in ~/.ssh/config
+ssh xznohostkey: the host key is unknown or has changed; check it by running `ssh xznohostkey' in a terminal, then try again
+ssh 127.0.0.1:1: connection refused; check that the SSH server runs and the port is right
+Cancelled: Connecting on ssh:xztest

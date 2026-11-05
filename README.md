@@ -133,6 +133,69 @@ browser, which you reload yourself. Set `html-preview-gpu` to nil if
 the helper draws badly with your graphics driver; it then draws on the
 CPU.
 
+### Remote files over SSH
+
+`C-x C-f` and `C-x d` can open files and directories on other
+machines. The file picker's prompt names the location
+(`Find file: [Local] ~/src/` or `Find file: [ssh:host] ~/`), and
+`M-l` (shown with the other keys, as space allows) chooses another:
+Local, a machine used in this session or saved from an earlier one, a
+`Host` alias from `~/.ssh/config` (or `ssh-config-file`), or *New SSH
+connection...*, which asks for the host, user and port. You can also
+type `[user@]host[:port]`. The path is then edited and completed as
+usual on that machine, starting where you were last in this dialog,
+or else in the directory you last browsed there. `M-l` or `C-g` in the
+location list returns to the file name as it was. From a remote
+buffer, `C-x C-f` and `C-x d` start on its machine; nothing else
+changes machine, so local buffers stay local. The mode line and the
+buffer list show remote buffers as `ssh:host`.
+
+Connections that worked, and the directory last browsed on each
+machine, are saved in `~/.xzile.d/locations` as soon as a connection
+succeeds or a remote file or directory is opened; the local directory
+is saved when a file or directory is opened through this picker. A
+failed connection is not saved. The file holds only host, user, port
+and directory (at most 32 connections), never passwords, keys or
+sockets. `~/.xzile.d` is created with mode 700, and is not used if it
+is a symbolic link, someone else's, or writable by others; the file
+has mode 600. Each save holds an `fcntl` lock on
+`~/.xzile.d/locations.lock`, reads the file again, changes the one
+location and renames a new file over the old, so sessions sharing it
+keep each other's changes and never see a partial file. A save that
+fails (or waits more than 2 seconds for another session's lock)
+leaves the file as it was, does not undo what you opened, and shows
+`Warning: locations not saved: ...` once, until a save works again.
+The first line is `xzile-locations 1`; then one record per line, most
+recent first, with tab-separated fields:
+
+    local   DIR
+    ssh     HOST    USER    PORT    DIR
+
+`USER`, `PORT` and `DIR` are empty when not known; `\\`, `\t`, `\n` and
+`\r` stand for a backslash, tab, newline and carriage return. Records
+that do not parse are ignored (and dropped on the next save); a file
+of another version, or one that cannot be read, is left alone (saves
+then fail, with the warning). With `-q` (`--no-init-file`) the file
+is neither read nor written.
+
+Remote buffers support visiting, creating, saving and reverting text
+files, and Dired for browsing (`RET`, `o`, `v`, `^`, `g`, marks).
+Saving writes only if the file is unchanged since it was read or
+saved, otherwise it asks; the buffer stays modified unless the remote
+side confirms what it wrote. Dired's `R` `C` `D` `x` `M` `+`, and
+shell, term, compile, Magit, shell commands and previews are refused
+in remote buffers rather than run locally, and a remote failure never
+falls back to a local file.
+
+XZile runs the system `ssh` with `BatchMode=yes`: it never asks for a
+password or passphrase, and host keys are checked as your ssh
+configuration says (an unknown host must first be accepted by running
+`ssh host` in a terminal). Use keys, `ssh-agent` or `~/.ssh/config`.
+One connection per machine is shared through a private control socket.
+Each operation can be cancelled with `C-g`, and is abandoned after
+`remote-timeout` seconds (30). The remote machine needs a POSIX shell
+with `cat`, `cksum`, `ls` and `mktemp`.
+
 ---
 
 ## Reporting bugs
