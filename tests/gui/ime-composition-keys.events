@@ -1,0 +1,20 @@
+# While composing (macOS reports the keys then too), Backspace and Left
+# edit the composition and Return commits it without a newline; after
+# the commit, Return and typing act on the buffer again.
+down e ctrl
+down n
+edit n
+down i
+edit ni
+down Backspace
+edit n
+down Left
+edit n
+down Return
+edit
+text n
+up Return
+down Return
+up Return
+down x
+text x

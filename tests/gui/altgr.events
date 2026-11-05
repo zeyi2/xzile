@@ -1,0 +1,13 @@
+# AltGr types characters: as Mode (KMOD_MODE), or as Right Alt on X11 and
+# Wayland, when its text is not the key's own character. Right Alt with
+# that character, or with no text, is Meta.
+down f ralt
+text f
+down q ralt
+text @
+down e mode
+text €
+down b ralt
+sleep 100
+down z
+text z

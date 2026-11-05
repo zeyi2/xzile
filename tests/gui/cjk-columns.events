@@ -1,0 +1,9 @@
+# CJK characters take two columns even when the editor is started in
+# the C locale: from column 4 of the second line, C-p lands after 文.
+# locales: C C.UTF-8
+down n ctrl
+down e ctrl
+down b ctrl
+down p ctrl
+down backslash shift
+text |

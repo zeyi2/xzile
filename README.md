@@ -49,6 +49,7 @@ Linux also needs WebKitGTK for HTML previews:
 make gui            # builds the GUI with all previews (including the Linux HTML helper)
 make install-gui    # installs the GUI and, on Linux, its helper and desktop entry
 make app            # macOS: builds XZile.app, to drag to Applications
+make check-gui      # Linux: tests the GUI's keyboard and input method handling
 ```
 
 What the window adds to the terminal editor:

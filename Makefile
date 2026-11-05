@@ -198,6 +198,12 @@ check: src/xzile src/estr-test src/layout-test modes/preview-test
 	modes/preview-test
 	XZILE=src/xzile sh tests/run-tests.sh
 
+# Keyboard and input method tests of xzile-gui, with SDL events injected
+# by LD_PRELOAD (Linux) and SDL's dummy video driver. They need the GUI
+# libraries, so `make check' does not run them.
+check-gui: src/xzile-gui
+	CC="$(CC)" PKG_CONFIG="$(PKG_CONFIG)" XZILE_GUI=src/xzile-gui sh tests/gui/run-tests.sh
+
 install: all
 	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(docdir) $(DESTDIR)$(man1dir)
 	$(INSTALL) -m 755 src/xzile $(DESTDIR)$(bindir)/$(PACKAGE)
@@ -233,4 +239,4 @@ clean:
 	rm -f src/mkdotzile src/dotzile.sample
 	rm -rf XZile.app
 
-.PHONY: all gui check install install-gui app uninstall clean
+.PHONY: all gui check check-gui install install-gui app uninstall clean

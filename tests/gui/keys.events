@@ -1,0 +1,14 @@
+# Typed text, Control and Meta keys, and Return; the text that comes
+# with a Meta key is not inserted.
+down e ctrl
+down b alt
+text b
+up b alt
+down Return
+up Return
+down h shift
+text H
+down i
+text i
+down 1 shift
+text !

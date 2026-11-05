@@ -1,0 +1,15 @@
+# An input method's commit is inserted after a special key and after a
+# Control key. With IBus the keys it takes produce no key down, so the
+# commit comes some events after the editor's last key.
+down Right
+up Right
+edit n
+edit ni
+edit
+text 你
+down f ctrl
+up f ctrl
+edit h
+edit hao
+edit
+text 好

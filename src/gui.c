@@ -32,6 +32,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <langinfo.h>
+#include <locale.h>
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
@@ -109,6 +111,7 @@ static char *font_size_var;	/* in use. */
 
 typedef struct {
 	char *path;
+	long index;
 	TTF_Font *font;
 } Fallback;
 
@@ -350,11 +353,13 @@ close_fallbacks (void)
 static TTF_Font *
 fallback_open (const FontFile *f)
 {
+	/* Faces of one collection may cover different characters. */
 	for (size_t i = 0; i < nfallbacks; i++)
-		if (strcmp (fallbacks[i].path, f->path) == 0)
+		if (strcmp (fallbacks[i].path, f->path) == 0 && fallbacks[i].index == f->index)
 			return fallbacks[i].font;
 	fallbacks = xrealloc (fallbacks, (nfallbacks + 1) * sizeof (Fallback));
 	fallbacks[nfallbacks].path = xstrdup (f->path);
+	fallbacks[nfallbacks].index = f->index;
 	fallbacks[nfallbacks].font = open_font (f, font_px ());
 	return fallbacks[nfallbacks++].font;
 }
@@ -862,9 +867,28 @@ show_cursor (SDL_Cursor *c)
 	}
 }
 
+/* The window shows UTF-8 whatever the locale, but character widths
+   come from wcwidth, which knows those of non-ASCII characters only in
+   a UTF-8 locale; and an app launched from Finder or a desktop menu
+   may have no locale at all. Then take a UTF-8 LC_CTYPE, so that the
+   whole editor agrees on the widths. */
+static void
+use_utf8_ctype (void)
+{
+	static const char *const names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
+	const char *codeset = nl_langinfo (CODESET);
+	if (strcmp (codeset, "UTF-8") == 0 || strcmp (codeset, "utf8") == 0)
+		return;
+	for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+		if (setlocale (LC_CTYPE, names[i]) != NULL)
+			return;
+}
+
 void
 term_init (void)
 {
+	use_utf8_ctype ();
+
 	/* An app launched from Finder or the Dock starts in `/'; start in
 	   the home directory instead, as a terminal session would. */
 	char *cwd = get_current_dir ();
@@ -1079,7 +1103,10 @@ static char *pending_paste_text;
 static size_t mouse_y, mouse_x;
 static bool mouse_down;
 static float wheel_acc;
-static bool suppress_text;	/* The key down was handled; drop its text. */
+static bool suppress_text;	/* The last event was a key down that was handled. */
+static bool composing;		/* An input method has uncommitted text. */
+static Keystroke altgr_key = KBD_NOKEY;	/* A Right Alt key waiting for its text, */
+static int altgr_char;			/* and the character it types without Alt. */
 
 static void
 queue_push (Keystroke key)
@@ -1212,7 +1239,10 @@ key_down (const SDL_KeyboardEvent *ev)
 	/* AltGr types characters rather than acting as Meta. */
 	bool meta = (mod & KMOD_ALT) != 0 && !(mod & KMOD_MODE);
 
-	suppress_text = false;
+	/* While composing, keys such as Return and Backspace belong to the
+	   input method, which on some systems still reports them. */
+	if (composing)
+		return;
 	if (mod & KMOD_GUI) {
 		command_key (sym, shift);
 		suppress_text = true;
@@ -1254,6 +1284,15 @@ key_down (const SDL_KeyboardEvent *ev)
 		key = (Keystroke) c;
 	if (meta)
 		key |= KBD_META;
+#ifndef __APPLE__
+	/* X11 and Wayland report AltGr as Right Alt: the key's text tells
+	   whether it was AltGr, which types it, or Meta. */
+	if (meta && !ctrl && (mod & KMOD_ALT) == KMOD_RALT) {
+		altgr_key = key;
+		altgr_char = c;
+		return;
+	}
+#endif
 	queue_push (key);
 	suppress_text = true;
 }
@@ -1354,6 +1393,22 @@ drag_to (size_t y, size_t x)
 static void
 handle_event (const SDL_Event *ev)
 {
+	/* SDL sends the text of a key straight after its key down. Later
+	   text, such as an input method's commit, is never the key's. */
+	bool key_handled = suppress_text;
+	suppress_text = false;
+	if (altgr_key != KBD_NOKEY) {
+		Keystroke key = altgr_key;
+		altgr_key = KBD_NOKEY;
+		if (ev->type == SDL_TEXTINPUT &&
+		    !(ev->text.text[0] == altgr_char && ev->text.text[1] == '\0')) {
+			push_text (ev->text.text);
+			return;
+		}
+		queue_push (key);
+		key_handled = true;
+	}
+
 	switch (ev->type) {
 	case SDL_QUIT:
 		push_keys ("\\C-x\\C-c");
@@ -1361,10 +1416,16 @@ handle_event (const SDL_Event *ev)
 	case SDL_KEYDOWN:
 		key_down (&ev->key);
 		break;
+	case SDL_TEXTEDITING:
+		/* A dead key after a key taken as Meta starts no composition
+		   of ours. */
+		if (!key_handled)
+			composing = ev->edit.text[0] != '\0';
+		break;
 	case SDL_TEXTINPUT:
-		if (!suppress_text)
+		composing = false;
+		if (!key_handled)
 			push_text (ev->text.text);
-		suppress_text = false;
 		break;
 	case SDL_MOUSEBUTTONDOWN:
 		if (ev->button.button == SDL_BUTTON_LEFT) {
@@ -1484,6 +1545,8 @@ handle_event (const SDL_Event *ev)
 		case SDL_WINDOWEVENT_FOCUS_GAINED:
 		case SDL_WINDOWEVENT_FOCUS_LOST:
 			focused = ev->window.event == SDL_WINDOWEVENT_FOCUS_GAINED;
+			/* Input methods end or forget their composition then. */
+			composing = false;
 			if (!focused)
 				drag_end ();
 			render ();
@@ -1543,6 +1606,11 @@ read_key (int delay)
 		SDL_Event ev;
 		while (SDL_PollEvent (&ev))
 			handle_event (&ev);
+		if (altgr_key != KBD_NOKEY) {
+			/* Its text, which comes at once, did not. */
+			queue_push (altgr_key);
+			altgr_key = KBD_NOKEY;
+		}
 		if (pending_resize)
 			apply_resize ();
 		if (queue_n > 0)
