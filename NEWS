@@ -20,9 +20,9 @@ GNU Zile NEWS                                         -*- outline -*-
   Decoding is done on the CPU in background threads, only once the
   image's header has given a size within bounds; zooming and panning
   reuse the textures. html-mode edits HTML, and C-c C-v
-  (html-preview) shows the file in a browser engine window, the
-  WebKitGTK helper xzile-html-preview on Linux (built by make gui), or
-  the default browser on macOS.
+  (html-preview) shows the file in a browser engine window, the helper
+  xzile-html-preview built by make gui: WebKitGTK on Linux, a native
+  WKWebView window on macOS.
 
   Dired, a directory editor as in Emacs. Open it with C-x d (dired),
   C-x C-j (dired-jump), or by visiting a directory. In a Dired buffer:

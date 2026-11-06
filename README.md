@@ -40,15 +40,16 @@ The installed binary is **xzile**, and the user init file is **~/.xzile**
 anti-aliased fonts, truecolor themes, a modern status bar, mouse
 support and the system clipboard. It is also plain C, and needs SDL2
 (2.0.18 or later), SDL2_ttf, SDL2_image, poppler-glib and cairo.
-Linux also needs WebKitGTK for HTML previews:
+Linux also needs WebKitGTK for HTML previews; macOS uses the system's
+WebKit:
 
 ```bash
 # Debian/Ubuntu: sudo apt install pkg-config libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libpoppler-glib-dev libcairo2-dev libwebkit2gtk-4.1-dev
 # Fedora:        sudo dnf install pkgconf-pkg-config SDL2-devel SDL2_ttf-devel SDL2_image-devel poppler-glib-devel cairo-devel webkit2gtk4.1-devel
 # macOS:         brew install sdl2 sdl2_ttf sdl2_image poppler cairo pkg-config
-make gui            # builds the GUI with all previews (including the Linux HTML helper)
-make install-gui    # installs the GUI and, on Linux, its helper and desktop entry
-make app            # macOS: builds XZile.app, to drag to Applications
+make gui            # builds the GUI with all previews, and the HTML preview helper
+make install-gui    # installs the GUI, its HTML preview helper and desktop entry
+make app            # macOS: builds XZile.app (with the helper), to drag to Applications
 make check-gui      # Linux: tests the GUI's keyboard, input method and mouse handling
 ```
 
@@ -129,18 +130,31 @@ in percent) is not shown, nor is a format other than those above.
 
 HTML files are edited as text in `html-mode`. `C-c C-v`
 (`html-preview`) shows the file rendered by a browser engine, in a
-window of its own: on Linux, the WebKitGTK helper `xzile-html-preview`,
-which runs pages with JavaScript, composites on the GPU when it can,
-and reloads when the file is saved. `C-c C-v` again reloads it and
+window of its own, the helper `xzile-html-preview`: WebKitGTK on
+Linux, and a native Cocoa window with WKWebView on macOS. It runs
+pages with JavaScript, loads images, styles and scripts relative to
+the file, and reloads when the file is saved (also when an editor
+saves by renaming a new file over it). `C-c C-v` again reloads it and
 brings it forward, `C-c C-k` closes it, and it closes with its buffer
-or the editor. On Linux, `make gui` builds the helper and
-`make install-gui` installs it alongside the editor.
+or the editor. `make gui` builds the helper and `make install-gui`
+installs it alongside the editor; `make app` puts it in
+`XZile.app/Contents/MacOS`, beside `xzile-gui`. The editor looks for
+`html-preview-program` next to itself first, then on `PATH`.
 
-Without the helper, `html-preview` opens the file with `xdg-open`. On
-macOS there is no helper: `html-preview` opens the file in the default
-browser, which you reload yourself. Set `html-preview-gpu` to nil if
-the helper draws badly with your graphics driver; it then draws on the
-CPU.
+In the window, F5 or Ctrl+R (Linux), Command-R (macOS) reload;
+Ctrl or Command with `+` `-` `0` zoom; Alt+Left and Alt+Right, or
+Command-`[` and Command-`]`, go back and forward; Alt+Home or
+Command-Shift-H return to the file; Ctrl+W or Command-W close it. On
+macOS, links and new windows open in the preview window itself, and
+links to other kinds of address (`mailto:`, ...) are refused: the
+helper never hands anything to the browser. There, pages can read
+only files in the HTML file's directory and below it.
+
+Without the helper, `html-preview` on Linux opens the file with
+`xdg-open`; on macOS it reports that the helper is missing and how to
+build it. Set `html-preview-gpu` to nil if the Linux helper draws
+badly with your graphics driver; it then draws on the CPU. The
+variable has no effect on macOS.
 
 ### Remote files over SSH
 

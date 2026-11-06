@@ -125,8 +125,18 @@ GUI_PKGS = sdl2 SDL2_ttf SDL2_image poppler-glib cairo
 GUI_CFLAGS = `$(PKG_CONFIG) --cflags $(GUI_PKGS)`
 GUI_LIBS = `$(PKG_CONFIG) --libs $(GUI_PKGS)` -lm
 
-# Linux uses a WebKitGTK helper; macOS uses the system browser.
+# The HTML preview helper, src/xzile-html-preview, is built by `make gui'
+# on Linux with WebKitGTK, and on macOS (Darwin) from Objective-C with
+# ARC, against Cocoa and WebKit (WKWebView); `uname -s' chooses.
 HTML_PREVIEW_PKG = webkit2gtk-4.1
+HTML_PREVIEW_SRC = modes/html_preview.c
+HTML_PREVIEW_CFLAGS = $(WARN_CFLAGS) `$(PKG_CONFIG) --cflags $(HTML_PREVIEW_PKG)`
+HTML_PREVIEW_LIBS = `$(PKG_CONFIG) --libs $(HTML_PREVIEW_PKG)`
+# The macOS helper uses the compiler's own C dialect, not -std=c99,
+# which the system headers are written for.
+HTML_PREVIEW_MACOS = HTML_PREVIEW_SRC=modes/html_preview_macos.m \
+	'HTML_PREVIEW_CFLAGS=-fobjc-arc -Wall -Wextra -Wno-unused-parameter' \
+	'HTML_PREVIEW_LIBS=-framework Cocoa -framework WebKit'
 
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o
 LAYOUT_TEST_OBJS = src/layout-test.o src/layout.o src/estr.o src/util.o
@@ -149,7 +159,10 @@ src/gui.o modes/gui_preview.o: modes/gui_preview.h
 modes/gui_preview.o $(GUI_RENDER_OBJS): modes/gui_render.h
 
 gui: src/xzile-gui
-	@if [ "`uname -s`" = Linux ]; then $(MAKE) src/xzile-html-preview; fi
+	@case "`uname -s`" in \
+	Linux) $(MAKE) src/xzile-html-preview ;; \
+	Darwin) $(MAKE) $(HTML_PREVIEW_MACOS) src/xzile-html-preview ;; \
+	esac
 
 # Rebuild old GUI objects when the feature flags or libraries change.
 src/gui.o $(GUI_MODE_OBJS): Makefile
@@ -169,9 +182,9 @@ modes/image_decode.o: modes/image_decode.c
 modes/pdf_render.o: modes/pdf_render.c
 	$(CC) $(ALL_CFLAGS) $(GUI_CFLAGS) -DHAVE_POPPLER -c -o $@ modes/pdf_render.c
 
-src/xzile-html-preview: modes/html_preview.c Makefile
-	$(CC) $(ZILE_CPPFLAGS) $(CPPFLAGS) $(WARN_CFLAGS) $(CFLAGS) `$(PKG_CONFIG) --cflags $(HTML_PREVIEW_PKG)` \
-		$(LDFLAGS) -o $@ modes/html_preview.c `$(PKG_CONFIG) --libs $(HTML_PREVIEW_PKG)` $(LIBS)
+src/xzile-html-preview: $(HTML_PREVIEW_SRC) Makefile
+	$(CC) $(ZILE_CPPFLAGS) $(CPPFLAGS) $(HTML_PREVIEW_CFLAGS) $(CFLAGS) \
+		$(LDFLAGS) -o $@ $(HTML_PREVIEW_SRC) $(HTML_PREVIEW_LIBS) $(LIBS)
 
 src/variables.o src/mkdotzile: src/tbl_vars.h
 
@@ -216,16 +229,18 @@ install-gui: gui
 	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(datarootdir)/applications
 	$(INSTALL) -m 755 src/xzile-gui $(DESTDIR)$(bindir)/$(PACKAGE)-gui
 	$(INSTALL) -m 644 xzile.desktop $(DESTDIR)$(datarootdir)/applications/$(PACKAGE).desktop
-	@if [ "`uname -s`" = Linux ]; then \
-		$(INSTALL) -m 755 src/xzile-html-preview $(DESTDIR)$(bindir)/$(PACKAGE)-html-preview; \
-	fi
+	@case "`uname -s`" in Linux|Darwin) \
+		$(INSTALL) -m 755 src/xzile-html-preview $(DESTDIR)$(bindir)/$(PACKAGE)-html-preview ;; \
+	esac
 
 # A macOS application bundle for xzile-gui, using the SDL2 libraries
-# it was built against.
+# it was built against. The HTML preview helper goes beside it, where
+# html-preview looks first.
 app: gui
 	rm -rf XZile.app
 	mkdir -p XZile.app/Contents/MacOS XZile.app/Contents/Resources
 	cp src/xzile-gui XZile.app/Contents/MacOS/$(PACKAGE)-gui
+	cp src/xzile-html-preview XZile.app/Contents/MacOS/$(PACKAGE)-html-preview
 	cp pic/XZile.icns XZile.app/Contents/Resources/XZile.icns
 	sed 's/@VERSION@/$(VERSION)/g' Info.plist.in > XZile.app/Contents/Info.plist
 

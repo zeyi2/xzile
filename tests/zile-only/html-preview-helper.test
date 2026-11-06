@@ -1,0 +1,85 @@
+#!/bin/sh
+# html-preview finds its helper and starts it with the right arguments
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. Fake helpers and browsers note
+# how they were run. The editor is copied, so that a helper can be put
+# next to it. On macOS no browser may ever be run, and html-preview-gpu
+# is not passed on; on Linux a missing helper falls back to xdg-open.
+
+set -u
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-html.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/bin" "$work/path"
+cp "$XZILE" "$work/bin/xzile" || exit 1
+log=$work/log
+printf '<p>hi</p>\n' > "$work/page.html"
+
+fake () {
+	printf '#!/bin/sh\necho "%s $*" >> "%s"\necho ready\nsleep 5\n' "$1" "$log" > "$2"
+	chmod +x "$2"
+}
+fake helper "$work/bin/xzile-html-preview"
+fake on-path "$work/path/xzile-path-preview"
+fake browser "$work/path/xdg-open"
+fake browser "$work/path/open"
+
+fail () {
+	echo "$*"
+	[ -f "$log" ] && { echo "--- what ran:"; cat "$log"; }
+	exit 1
+}
+
+# Run html-preview on page.html after the Lisp `$1'; print what ran.
+run () {
+	rm -f "$log"
+	printf '%s\n(html-preview)\n(sit-for 1)\n(save-buffers-kill-emacs)\n' "$1" > "$work/t.el"
+	(cd "$work" && PATH="$work/path:$PATH" bin/xzile --no-init-file page.html --load t.el \
+		</dev/null >/dev/null 2>&1)
+	[ -f "$log" ] && cat "$log"
+	return 0
+}
+
+page=$work/page.html
+apple=false
+[ "$(uname -s)" = Darwin ] && apple=true
+
+[ "$(run '')" = "helper -- $page" ] || fail "the helper next to the editor was not run"
+[ "$(run '(setq html-preview-program "xzile-path-preview")')" = "on-path -- $page" ] ||
+	fail "the helper on PATH was not run"
+[ "$(run "(setq html-preview-program \"$work/path/xzile-path-preview\")")" = "on-path -- $page" ] ||
+	fail "the helper named by its file was not run"
+
+out=$(run '(setq html-preview-gpu nil)')
+if $apple; then
+	[ "$out" = "helper -- $page" ] || fail "html-preview-gpu changed the macOS helper's arguments"
+else
+	[ "$out" = "helper --software -- $page" ] || fail "html-preview-gpu nil did not pass --software"
+fi
+
+for program in '"no-such-preview"' 'nil'; do
+	out=$(run "(setq html-preview-program $program)")
+	if $apple; then
+		[ -z "$out" ] || fail "macOS ran something without the helper ($program)"
+	else
+		[ "$out" = "browser $page" ] || fail "no xdg-open fallback without the helper ($program)"
+	fi
+done
+exit 0

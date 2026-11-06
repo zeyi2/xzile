@@ -18,11 +18,12 @@
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 /* HTML is edited as text. html-preview (C-c C-v in html-mode) shows the
-   file in a browser engine in a window of its own: the WebKitGTK helper
-   xzile-html-preview on Linux (html_preview.c), or the system browser.
-   The helper reloads when the file changes; SIGUSR1 makes it reload
-   and come to the front. It is a background process of the buffer,
-   ended with it or with the editor. */
+   file in a browser engine in a window of its own, the helper
+   xzile-html-preview: WebKitGTK on Linux (html_preview.c), WKWebView on
+   macOS (html_preview_macos.m). Without the helper, Linux falls back to
+   xdg-open; macOS reports an error. The helper reloads when the file
+   changes; SIGUSR1 makes it reload and come to the front. It is a
+   background process of the buffer, ended with it or with the editor. */
 
 #include "../src/xzile.h"
 
@@ -30,6 +31,9 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 /* The preview window of a buffer. */
 struct Html {
@@ -182,6 +186,7 @@ helper_exit (Process *p, int status, void *owner)
 	process_free (p);
 }
 
+#ifndef __APPLE__
 /* A program that hands a file to the browser, and exits. */
 typedef struct {
 	char *what;
@@ -227,12 +232,44 @@ open_in_browser (const char *program, const char *path)
 	process_set_background (p);
 	return true;
 }
+#endif
 
-#ifndef __APPLE__
 static bool
 is_executable (const char *path)
 {
 	return file_is_regular (path) && access (path, X_OK) == 0;
+}
+
+/* The file of this program, with symbolic links resolved, or NULL. */
+static char *
+self_path (void)
+{
+#ifdef __APPLE__
+	char small[1024];
+	uint32_t size = sizeof small;
+	char *buf = small;
+	if (_NSGetExecutablePath (buf, &size) != 0) {
+		/* `size' is now the length needed. */
+		buf = xmalloc (size);
+		if (_NSGetExecutablePath (buf, &size) != 0) {
+			free (buf);
+			return NULL;
+		}
+	}
+	char *real = realpath (buf, NULL);
+	char *path = real != NULL ? xstrdup (real) : xstrdup (buf);
+	free (real);
+	if (buf != small)
+		free (buf);
+	return path;
+#else
+	char self[4096];
+	ssize_t n = readlink ("/proc/self/exe", self, sizeof self - 1);
+	if (n <= 0)
+		return NULL;
+	self[n] = '\0';
+	return xstrdup (self);
+#endif
 }
 
 /* The helper: html-preview-program, found next to this program (so
@@ -251,13 +288,12 @@ find_helper (void)
 		return NULL;
 	}
 
-	char self[4096];
-	ssize_t n = readlink ("/proc/self/exe", self, sizeof self - 1);
-	if (n > 0) {
-		self[n] = '\0';
+	char *self = self_path ();
+	if (self != NULL) {
 		char *dir = path_dirname (self);
 		char *path = path_join (dir, name);
 		free (dir);
+		free (self);
 		if (is_executable (path))
 			return path;
 		free (path);
@@ -279,33 +315,38 @@ find_helper (void)
 	free (dirs);
 	return found;
 }
-#endif
 
 static bool
 start_html_preview (Buffer *bp)
 {
-#ifdef __APPLE__
-	/* No native engine here: the file's default application, normally
-	   the browser. */
-	if (!open_in_browser ("open", bp->filename))
-		return false;
-	minibuf_write ("Opened %s in the browser", bp->name);
-	return true;
-#else
 	char *helper = find_helper ();
 	if (helper == NULL) {
+#ifdef __APPLE__
+		/* Never the browser: it would not follow the file, nor close
+		   with the buffer. */
+		const char *name = get_variable ("html-preview-program");
+		if (name == NULL || *name == '\0' || strcmp (name, "nil") == 0)
+			minibuf_error ("html-preview-program is nil; set it to xzile-html-preview");
+		else
+			minibuf_error ("No %s next to the editor or on PATH; build it with `make gui'", name);
+		return false;
+#else
 		if (!open_in_browser ("xdg-open", bp->filename))
 			return false;
 		minibuf_write ("xzile-html-preview is not installed; opened %s with xdg-open", bp->name);
 		return true;
+#endif
 	}
 
 	Html *h = html_get (bp);
 	const char *argv[5];
 	size_t n = 0;
 	argv[n++] = helper;
+#ifndef __APPLE__
+	/* WKWebView chooses how it draws by itself. */
 	if (!get_variable_bool ("html-preview-gpu"))
 		argv[n++] = "--software";
+#endif
 	argv[n++] = "--";
 	argv[n++] = bp->filename;
 	argv[n] = NULL;
@@ -323,7 +364,6 @@ start_html_preview (Buffer *bp)
 	process_set_background (h->proc);
 	minibuf_write ("Opening the HTML preview of %s", bp->name);
 	return true;
-#endif
 }
 
 static bool
@@ -392,8 +432,9 @@ html_mode_init (void)
 	lisp_func_new ("html-preview", F_html_preview, true,
 		       "Show the visited HTML file, rendered by a browser engine, in a window\n"
 		       "of its own; if it is open already, reload it and bring it forward.\n"
-		       "On Linux this runs `html-preview-program' (xzile-html-preview, built\n"
-		       "with `make gui') or else xdg-open; on macOS, the browser.");
+		       "This runs `html-preview-program' (xzile-html-preview, built with\n"
+		       "`make gui'): WebKitGTK on Linux, falling back to xdg-open without it,\n"
+		       "and a native WKWebView window on macOS, which never opens a browser.");
 	lisp_func_new ("html-preview-quit", F_html_preview_quit, true,
 		       "Close the HTML preview window of the current buffer.");
 }
