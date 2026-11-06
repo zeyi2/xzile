@@ -365,6 +365,7 @@ main (int argc, char **argv)
 	image_mode_init ();
 	pdf_mode_init ();
 	html_mode_init ();
+	markdown_mode_init ();
 	selectors_init ();
 	eval_init ();
 	file_init ();

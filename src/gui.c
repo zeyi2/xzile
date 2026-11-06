@@ -414,6 +414,7 @@ typedef struct {
 	int style;
 	SDL_Texture *tex;	/* NULL if nothing to draw. */
 	int w, h, dy;		/* Size, and offset from the cell's text top. */
+	int slant;		/* The width a synthesized italic adds. */
 	bool used;
 } Glyph;
 
@@ -474,6 +475,10 @@ glyph_get (const char *text, int style)
 	g->tex = SDL_CreateTextureFromSurface (renderer, surf);
 	g->w = surf->w;
 	g->h = surf->h;
+	/* SDL_ttf shears a synthesized italic by about a fifth of its
+	   height, making it wider than its cell without being a wider
+	   character. */
+	g->slant = TTF_GetFontStyle (font) & TTF_STYLE_ITALIC ? TTF_FontHeight (font) / 4 : 0;
 	/* Align the baselines of fallback fonts with the main font. */
 	g->dy = ascent - TTF_FontAscent (font);
 	SDL_FreeSurface (surf);
@@ -674,7 +679,7 @@ draw_text (const Cell *c, int x, int y, int width, Rgb fg)
 		return;
 	SDL_Rect dst = { x, y + text_y + g->dy, g->w, g->h };
 	int room = width * cell_w;
-	if (g->w > room + cell_w / 4) {
+	if (g->w > room + cell_w / 4 + g->slant) {
 		/* Shrink glyphs from wider fallback fonts to fit their cells. */
 		dst.w = room;
 		dst.h = g->h * room / g->w;

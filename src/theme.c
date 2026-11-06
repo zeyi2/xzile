@@ -36,11 +36,15 @@ typedef struct {
 	bool bold;
 	bool underline;
 	bool reverse;
+	bool italic;
+	bool strike;
 	bool has_foreground;
 	bool has_background;
 	bool has_bold;
 	bool has_underline;
 	bool has_reverse;
+	bool has_italic;
+	bool has_strike;
 } FaceSpec;
 
 typedef struct {
@@ -53,7 +57,7 @@ typedef struct {
 typedef struct {
 	const char *foreground;
 	const char *background;
-	bool bold, underline, reverse;
+	bool bold, underline, reverse, italic, strike;
 	bool has_foreground, has_background;
 } ResolvedFace;
 
@@ -106,6 +110,24 @@ static const char *const builtin_faces[] = {
 	FACE_LINK,
 	FACE_LINK_HOVER,
 	FACE_TOOLTIP,
+	FACE_MARKDOWN_HEADER_1,
+	FACE_MARKDOWN_HEADER_2,
+	FACE_MARKDOWN_HEADER_3,
+	FACE_MARKDOWN_HEADER_4,
+	FACE_MARKDOWN_HEADER_5,
+	FACE_MARKDOWN_HEADER_6,
+	FACE_MARKDOWN_BOLD,
+	FACE_MARKDOWN_ITALIC,
+	FACE_MARKDOWN_STRIKE,
+	FACE_MARKDOWN_INLINE_CODE,
+	FACE_MARKDOWN_CODE,
+	FACE_MARKDOWN_LINK,
+	FACE_MARKDOWN_MARKUP,
+	FACE_MARKDOWN_BLOCKQUOTE,
+	FACE_MARKDOWN_LIST,
+	FACE_MARKDOWN_TABLE,
+	FACE_MARKDOWN_HR,
+	FACE_MARKDOWN_TASK_DONE,
 };
 
 static bool
@@ -202,6 +224,10 @@ merge_face_spec (ResolvedFace *resolved, const FaceSpec *face)
 		resolved->underline = face->underline;
 	if (face->has_reverse)
 		resolved->reverse = face->reverse;
+	if (face->has_italic)
+		resolved->italic = face->italic;
+	if (face->has_strike)
+		resolved->strike = face->strike;
 }
 
 /* How the faces of links look in a theme that leaves them out, which
@@ -429,6 +455,7 @@ apply_mono_fallback (const char *face_name, const TerminalCapabilities *capabili
 		FACE_FONT_LOCK_COMMENT, FACE_FONT_LOCK_KEYWORD, FACE_FONT_LOCK_FUNCTION_NAME,
 		FACE_FONT_LOCK_TYPE, FACE_FONT_LOCK_CONSTANT, FACE_FONT_LOCK_BUILTIN,
 		FACE_FONT_LOCK_PREPROCESSOR, FACE_FONT_LOCK_WARNING,
+		FACE_MARKDOWN_INLINE_CODE, FACE_MARKDOWN_CODE,
 	};
 
 	for (size_t i = 0; i < sizeof strong / sizeof strong[0]; i++)
@@ -478,6 +505,8 @@ resolve_terminal_style (const char *face_name, TerminalStyle *style)
 	style->bold = resolved.bold;
 	style->underline = capabilities->supports_underline && resolved.underline;
 	style->reverse = capabilities->supports_reverse && resolved.reverse;
+	style->italic = resolved.italic;
+	style->strike = resolved.strike;
 
 	if (!capabilities->has_colors) {
 		apply_mono_fallback (face_name, capabilities, style);
@@ -505,8 +534,57 @@ resolve_terminal_style (const char *face_name, TerminalStyle *style)
 	return true;
 }
 
+bool
+resolve_terminal_faces (const char *const *faces, size_t n, TerminalStyle *style)
+{
+	TerminalStyle dflt;
+	bool have_dflt = resolve_terminal_style (FACE_DEFAULT, &dflt), any = false;
+	for (size_t i = 0; i < n; i++) {
+		TerminalStyle st;
+		if (faces[i] == NULL || !resolve_terminal_style (faces[i], &st))
+			continue;
+		if (!any) {
+			*style = st;
+			any = true;
+			continue;
+		}
+		/* Colours count where they are not the default face's, which
+		   every face inherits. */
+		if (st.has_foreground && !(have_dflt && dflt.has_foreground && dflt.foreground == st.foreground)) {
+			style->foreground = st.foreground;
+			style->has_foreground = true;
+		}
+		if (st.has_background && !(have_dflt && dflt.has_background && dflt.background == st.background)) {
+			style->background = st.background;
+			style->has_background = true;
+		}
+		style->bold |= st.bold;
+		style->underline |= st.underline;
+		style->reverse |= st.reverse;
+		style->italic |= st.italic;
+		style->strike |= st.strike;
+	}
+	return any;
+}
+
 /* Tri-state booleans for face definitions. */
 enum { U = -1, F = 0, T = 1 };
+
+static void
+set_face_slant (Theme *theme, const char *name, int italic, int strike)
+{
+	FaceSpec *face = map_get (theme->faces, name);
+	if (face == NULL)
+		return;
+	if (italic != U) {
+		face->italic = italic;
+		face->has_italic = true;
+	}
+	if (strike != U) {
+		face->strike = strike;
+		face->has_strike = true;
+	}
+}
 
 static void
 set_builtin_face (Theme *theme, const char *name, const char *foreground,
@@ -535,6 +613,42 @@ set_builtin_face (Theme *theme, const char *name, const char *foreground,
 		face->has_reverse = true;
 	}
 	free (theme_set_face (theme, face));
+}
+
+/* The colours of a theme's Markdown faces: headings of levels 1, 2, 3
+   and deeper; inline code and its background; the background of code
+   blocks; links, markup (delimiters, table rules), quotes and list
+   markers. NULL leaves a colour to the default face. */
+typedef struct {
+	const char *heading[4];
+	const char *code, *code_bg, *block_bg, *link, *markup, *quote, *list;
+} MarkdownColors;
+
+static void
+set_markdown_faces (Theme *t, const MarkdownColors *c)
+{
+	static const char *const headings[] = {
+		FACE_MARKDOWN_HEADER_1, FACE_MARKDOWN_HEADER_2, FACE_MARKDOWN_HEADER_3,
+		FACE_MARKDOWN_HEADER_4, FACE_MARKDOWN_HEADER_5, FACE_MARKDOWN_HEADER_6,
+	};
+	for (size_t i = 0; i < 6; i++)
+		set_builtin_face (t, headings[i], c->heading[MIN (i, 3)], NULL, NULL, T, i == 0 ? T : U, U);
+	set_builtin_face (t, FACE_MARKDOWN_BOLD, NULL, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_ITALIC, NULL, NULL, NULL, U, U, U);
+	set_face_slant (t, FACE_MARKDOWN_ITALIC, T, U);
+	set_builtin_face (t, FACE_MARKDOWN_STRIKE, NULL, NULL, NULL, U, U, U);
+	set_face_slant (t, FACE_MARKDOWN_STRIKE, U, T);
+	set_builtin_face (t, FACE_MARKDOWN_INLINE_CODE, c->code, c->code_bg, NULL, U, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_CODE, c->code, c->block_bg, NULL, U, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_LINK, c->link, NULL, NULL, U, T, U);
+	set_builtin_face (t, FACE_MARKDOWN_MARKUP, c->markup, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_BLOCKQUOTE, c->quote, NULL, NULL, U, U, U);
+	set_face_slant (t, FACE_MARKDOWN_BLOCKQUOTE, T, U);
+	set_builtin_face (t, FACE_MARKDOWN_LIST, c->list, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_TABLE, c->markup, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_HR, c->markup, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_MARKDOWN_TASK_DONE, c->markup, NULL, NULL, U, U, U);
+	set_face_slant (t, FACE_MARKDOWN_TASK_DONE, U, T);
 }
 
 static void
@@ -585,6 +699,9 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_LINK, "cyan", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "brightblack", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "brightwhite", "brightblack", NULL, U, U, U);
+	set_markdown_faces (t, &(MarkdownColors) {
+		{ "cyan", "magenta", "yellow", "green" }, "green", NULL, NULL, "cyan", "brightblack",
+		"brightblack", "yellow" });
 }
 
 static void
@@ -635,6 +752,9 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_LINK, "blue", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "cyan", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "black", "yellow", NULL, U, U, U);
+	set_markdown_faces (t, &(MarkdownColors) {
+		{ "blue", "magenta", "red", "green" }, "green", NULL, NULL, "blue", "brightblack",
+		"brightblack", "red" });
 }
 
 static void
@@ -685,6 +805,8 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_LINK, NULL, NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, NULL, NULL, U, T, T);
 	set_builtin_face (t, FACE_TOOLTIP, NULL, NULL, NULL, U, U, T);
+	set_markdown_faces (t, &(MarkdownColors) { { NULL, NULL, NULL, NULL }, NULL, NULL, NULL,
+		NULL, NULL, NULL, NULL });
 }
 
 /* Themes in hex colours for truecolor displays such as the GUI; other
@@ -738,6 +860,9 @@ define_xzile_dark_theme (void)
 	set_builtin_face (t, FACE_LINK, "#82aaff", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#2a3142", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "#e3e7ee", "#2b303b", NULL, U, U, U);
+	set_markdown_faces (t, &(MarkdownColors) {
+		{ "#82aaff", "#c099ff", "#65d1e6", "#ffc777" }, "#f5a97f", "#252933", "#1e2128",
+		"#82aaff", "#5f6779", "#9aa3b2", "#ff9e64" });
 }
 
 static void
@@ -789,6 +914,9 @@ define_xzile_light_theme (void)
 	set_builtin_face (t, FACE_LINK, "#3b6fe0", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#e3e9f8", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "#2b2d33", "#eceef2", NULL, U, U, U);
+	set_markdown_faces (t, &(MarkdownColors) {
+		{ "#3b6fe0", "#a626a4", "#0f7f8f", "#b86e00" }, "#c4570d", "#eceef2", "#f3f4f7",
+		"#3b6fe0", "#9da2ad", "#696c77", "#c4570d" });
 }
 
 static char *
@@ -843,11 +971,15 @@ copy_theme_face_for_edit (const Theme *theme, const char *face_name, char **err)
 	face->bold = existing->bold;
 	face->underline = existing->underline;
 	face->reverse = existing->reverse;
+	face->italic = existing->italic;
+	face->strike = existing->strike;
 	face->has_foreground = existing->has_foreground;
 	face->has_background = existing->has_background;
 	face->has_bold = existing->has_bold;
 	face->has_underline = existing->has_underline;
 	face->has_reverse = existing->has_reverse;
+	face->has_italic = existing->has_italic;
+	face->has_strike = existing->has_strike;
 	return face;
 }
 
@@ -889,6 +1021,10 @@ apply_face_attribute (FaceSpec *face, const char *attr_name, const char *attr_va
 		return apply_bool_attribute (attr_name, attr_value, &face->underline, &face->has_underline, err);
 	else if (strcmp (attr_name, ":reverse") == 0)
 		return apply_bool_attribute (attr_name, attr_value, &face->reverse, &face->has_reverse, err);
+	else if (strcmp (attr_name, ":italic") == 0)
+		return apply_bool_attribute (attr_name, attr_value, &face->italic, &face->has_italic, err);
+	else if (strcmp (attr_name, ":strike-through") == 0)
+		return apply_bool_attribute (attr_name, attr_value, &face->strike, &face->has_strike, err);
 	else {
 		*err = xasprintf ("Unknown face attribute `%s'", attr_name);
 		return false;
@@ -1104,11 +1240,13 @@ theme_init (void)
 		       "Set attribute overrides for FACE in the current theme.\n"
 		       "\n"
 		       "Arguments are FACE followed by :ATTRIBUTE VALUE pairs such as\n"
-		       ":fg, :bg, :bold, :underline, :reverse, and :inherit.");
+		       ":fg, :bg, :bold, :underline, :reverse, :italic, :strike-through,\n"
+		       "and :inherit.");
 
 	lisp_func_new ("theme-set-face", F_theme_set_face, false,
 		       "Set attribute overrides for FACE in THEME.\n"
 		       "\n"
 		       "Arguments are THEME, FACE, and then :ATTRIBUTE VALUE pairs such as\n"
-		       ":fg, :bg, :bold, :underline, :reverse, and :inherit.");
+		       ":fg, :bg, :bold, :underline, :reverse, :italic, :strike-through,\n"
+		       "and :inherit.");
 }

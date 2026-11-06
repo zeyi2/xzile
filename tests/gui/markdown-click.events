@@ -1,0 +1,46 @@
+# Markdown mode draws the lines but point's rendered, with their markup
+# hidden. A click on such a line puts point on the character clicked in
+# the text, though the line is then drawn as source: in "bold" of
+# **bold**, before the CJK 粗 of **粗**, before "task" of a task item
+# drawn as a box, and in *one* of a heading. C-c C-x C-x checks the
+# task, and C-c C-a aligns the table clicked in, keeping point in the
+# cell it was in. The window shows UTF-8 in either locale.
+# locales: C C.UTF-8
+down x alt
+text x
+up x alt
+sleep 200
+text markdown-mode
+down Return
+sleep 400
+click 1 8
+sleep 300
+text X
+sleep 300
+click 2 5
+sleep 300
+text W
+sleep 300
+click 3 4
+sleep 300
+text Y
+sleep 200
+down c ctrl
+up c ctrl
+down x ctrl
+up x ctrl
+down x ctrl
+up x ctrl
+sleep 300
+click 0 6
+sleep 300
+text Z
+sleep 300
+click 6 3
+sleep 300
+down c ctrl
+up c ctrl
+down a ctrl
+up a ctrl
+sleep 300
+text @

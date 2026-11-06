@@ -109,6 +109,10 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 
 	size_t line_len = buffer_line_len (bp, o);
 	size_t ew = gutter_width < wp->ewidth ? wp->ewidth - gutter_width : 0;
+	if (markdown_draw_line (wp, o, ew, startcol, highlight ? r : NULL)) {
+		term_apply_face (FACE_DEFAULT);
+		return;
+	}
 	const char **syntax_faces = NULL;
 
 	if (bp->highlighter != NULL && line_len > 0) {

@@ -24,6 +24,14 @@ GNU Zile NEWS                                         -*- outline -*-
   xzile-html-preview built by make gui: WebKitGTK on Linux, a native
   WKWebView window on macOS.
 
+  markdown-mode, for .md, .markdown and .mdown files, in the terminal
+  and the window: the buffer stays Markdown source, and the lines but
+  point's are drawn rendered (headings, emphasis, code, links, quotes,
+  lists, task boxes, rules and tables) with their markup hidden; a
+  click lands on the character clicked. C-c C-v shows the source,
+  C-c C-a aligns a pipe table, C-c C-s b/i/c wrap the region, and
+  C-c C-x C-x toggles a task box.
+
   Dired, a directory editor as in Emacs. Open it with C-x d (dired),
   C-x C-j (dired-jump), or by visiting a directory. In a Dired buffer:
 

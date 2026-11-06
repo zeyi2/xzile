@@ -104,10 +104,11 @@ CORE_OBJS = \
 	src/winhist.o \
 	$(MODE_OBJS)
 
-# The image, PDF and HTML modes, in modes/. These need only the C
-# library; what draws images and PDFs is in xzile-gui alone.
+# The image, PDF, HTML and Markdown modes, in modes/. These need only
+# the C library; what draws images and PDFs is in xzile-gui alone.
 MODE_OBJS = \
 	modes/html.o \
+	modes/markdown.o \
 	modes/image.o \
 	modes/image_probe.o \
 	modes/pdf.o \

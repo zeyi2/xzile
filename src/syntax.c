@@ -520,7 +520,9 @@ filetype_resolve_highlighter (const char *filename)
 void
 filetype_apply_to_buffer (Buffer *bp)
 {
-	buffer_set_highlighter (bp, filetype_resolve_highlighter (bp->filename));
+	/* A buffer put in markdown-mode keeps it when renamed. */
+	const Mode *markdown = markdown_highlighter (bp);
+	buffer_set_highlighter (bp, markdown != NULL ? markdown : filetype_resolve_highlighter (bp->filename));
 	debug_log ("filetype", "apply_to_buffer buffer=%s filename=%s highlighter=%s",
 		   bp->name != NULL ? bp->name : "(null)",
 		   bp->filename != NULL ? bp->filename : "(null)",

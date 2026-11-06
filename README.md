@@ -156,6 +156,69 @@ build it. Set `html-preview-gpu` to nil if the Linux helper draws
 badly with your graphics driver; it then draws on the CPU. The
 variable has no effect on macOS.
 
+### Markdown
+
+Files ending in `.md`, `.markdown` or `.mdown` (in any case, local or
+remote) are visited in `markdown-mode` (`M-x markdown-mode` selects it
+in any buffer), in `xzile` and the window alike. The buffer stays the
+Markdown source: what is saved, searched, killed and undone is the
+text as typed. Only the drawing changes. The line point is on, and
+every line of a highlighted region, is drawn as source; the other lines
+are drawn rendered, with their markup hidden:
+
+- ATX (`#`) and setext headings in the `markdown-header-face-1` to `-6`
+  faces; `**strong**`, `*emphasis*`, `_emphasis_` and `~~strike~~`
+  (by CommonMark's delimiter rules), `` `code spans` ``, `[links](url)`
+  and `<autolinks>` (the link text alone), and backslash escapes.
+- Block quotes, bullet and ordered lists, task boxes `[ ]` and `[x]`,
+  thematic breaks across the window, fenced (backticks or tildes, of
+  any length) and indented code blocks, and pipe tables. Where the
+  locale can show them, bullets, quote bars, task boxes, table borders
+  and rules are drawn as `•` `│` `☐` `☑` `─`.
+
+A click, or a drag, on a rendered line puts point on the character
+under the pointer, as the line was drawn, even though the line is then
+drawn as source; so does a click past hidden markup or wide (CJK)
+characters. Moving point, a search or a region shows the source of the
+lines it reaches. Lines are not wrapped: a long line scrolls sideways
+as in other buffers. The faces (`markdown-bold-face`,
+`markdown-inline-code-face`, `markdown-link-face`,
+`markdown-markup-face`, `markdown-table-face` and the rest) are
+defined in every theme, the same in both frontends, and can be changed
+with `set-face-attribute`, for instance
+`(set-face-attribute "markdown-bold-face" :fg "#ffcc66")`.
+
+| Key | Command | |
+|-----|---------|-|
+| `C-c C-v` | `markdown-toggle-source` | show all of the buffer as highlighted source, or rendered again |
+| `C-c C-a` | `markdown-table-align` | align the table point is in |
+| `C-c C-s b` | `markdown-insert-bold` | wrap the region in `**`, or unwrap it |
+| `C-c C-s i` | `markdown-insert-italic` | wrap the region in `*`, or unwrap it |
+| `C-c C-s c` | `markdown-insert-code` | make the region a code span, or plain again |
+| `C-c C-x C-x` | `markdown-toggle-task` | check or uncheck the task box on point's line |
+
+With no region, the wrapping commands insert an empty pair with point
+inside. `C-c C-a` works on a pipe table: a header row, a delimiter row
+such as `|:--|:-:|--:|`, and the rows after it, with or without outer
+pipes. It pads every cell to its column's width, aligned as the
+delimiter row says (keeping its colons), counts CJK and other wide
+characters as two columns whatever the locale, treats `\|` and pipes in
+code spans as text, gives short rows empty cells, and keeps any cells
+beyond the header's. Point stays at the same place in the same cell.
+The change is a single undo; on a table aligned already it changes
+nothing. It refuses read-only buffers, tables in code blocks, and lines
+with pipes that are not a table.
+
+The rendering is a scoped subset of CommonMark and GitHub's tables,
+parsed a line at a time (with what the lines before need to say, such
+as an open code fence, cached as for syntax highlighting). Not
+recognised, and so shown as source: images (drawn in the link face),
+reference links and footnotes, HTML, entities, hard line breaks, and
+emphasis or code spans that span lines. Lazy continuation lines of
+quotes are drawn as paragraphs. Rendered table cells keep the
+width they have in the source, so a table is drawn aligned once
+`C-c C-a` has aligned its text. Nothing is rendered in a browser and
+there is no separate preview buffer.
 ### Remote files over SSH
 
 `C-x C-f` and `C-x d` can open files and directories on other

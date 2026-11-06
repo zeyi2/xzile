@@ -1,0 +1,19 @@
+Intro | with a pipe, but no delimiter row: not a table.
+
+| Name | Qty | Note |
+|:--|--:|:-:|
+| **bold** | 1 | `a|b` |
+| 数量 | 22 | x \| y |
+| short |
+| a | b | c | extra |
+
+a | b
+--|--
+long cell | x
+
+````md
+```
+| inner | fence |
+|---|---|
+```
+````

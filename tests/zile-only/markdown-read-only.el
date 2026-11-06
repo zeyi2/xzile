@@ -1,0 +1,12 @@
+; The Markdown commands do not change a read-only buffer.
+(markdown-mode)
+(toggle-read-only)
+(markdown-table-align)
+(forward-line 3)
+(markdown-toggle-task)
+(markdown-insert-bold)
+(markdown-insert-code)
+(toggle-read-only)
+(insert "!")
+(save-buffer)
+(save-buffers-kill-emacs)

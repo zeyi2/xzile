@@ -230,6 +230,10 @@ term_apply_style (const TerminalStyle *style)
 		cur_attr.flags |= ATTR_UNDERLINE;
 	if (style->reverse)
 		cur_attr.flags |= ATTR_REVERSE;
+	if (style->italic)
+		cur_attr.flags |= ATTR_ITALIC;
+	if (style->strike)
+		cur_attr.flags |= ATTR_STRIKE;
 
 	if (!term_get_capabilities ()->has_colors || (!style->has_foreground && !style->has_background))
 		return;

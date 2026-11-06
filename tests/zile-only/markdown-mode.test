@@ -1,0 +1,220 @@
+#!/bin/sh
+# Markdown mode: which files select it, and the live preview in a
+# terminal
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. The preview is checked on a
+# pseudo-terminal made by Python, which reads what the editor draws,
+# types keys and clicks; without python3, or a UTF-8 locale, that part
+# is skipped. Prints why on failure.
+
+set -u
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-markdown.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+H=$work/home
+mkdir "$H"
+
+fail () {
+	printf '%s\n' "$*"
+	exit 1
+}
+
+# Visit the file `$1' in $work, align the table on its first line
+# (C-c C-a, in Markdown mode alone), save it and quit.
+align () {
+	printf '(execute-kbd-macro "\\C-c\\C-a\\C-x\\C-s\\C-x\\C-c")\n' > "$work/keys.el"
+	errors=$(cd "$work" && HOME=$H "$XZILE" "$1" --load "$work/keys.el" </dev/null 2>&1 >/dev/null)
+	[ $? -eq 0 ] || fail "$1: exit status $?: $errors"
+	[ -z "$errors" ] || fail "$1: output on stderr: $errors"
+}
+
+table='| a | bb |\n|-|-:|\n| ccc | d |\n'
+aligned='| a   |  bb |\n| --- | --: |\n| ccc |   d |\n'
+
+# 1. Markdown mode is selected by the suffix, whatever its case.
+for f in notes.MD b.markdown c.Mdown d.md.txt e.mdx; do
+	printf "$table" > "$work/$f"
+	align "$f"
+	case $f in
+		*.txt|*.mdx) want=$table ;;
+		*) want=$aligned ;;
+	esac
+	printf "$want" | cmp -s - "$work/$f" || fail "step 1: $f is: $(cat "$work/$f")"
+done
+
+# 2. A table aligned already is not changed: there is nothing to save,
+# so no backup is made.
+printf "$aligned" > "$work/aligned.md"
+align aligned.md
+printf "$aligned" | cmp -s - "$work/aligned.md" || fail "step 2: aligned.md is: $(cat "$work/aligned.md")"
+[ ! -e "$work/aligned.md~" ] || fail "step 2: aligned.md was saved"
+
+command -v python3 >/dev/null 2>&1 || exit 0
+utf8=$(locale -a 2>/dev/null | grep -i -m 1 '^c\.utf-\{0,1\}8$')
+[ -n "$utf8" ] || exit 0
+
+# 3. In a terminal, the lines but point's are drawn rendered. A click
+# on a rendered line puts point on the character clicked in the text,
+# whatever markup is hidden before it. C-c C-v shows the source.
+printf '%s\n' '# Title *one*' 'Some **bold** and `code` here.' '| A | B |' '|---|---|' \
+	'| x | y |' '- [ ] task' '数量 **粗**' > "$work/r.md"
+errors=$(cd "$work" && HOME=$H TERM=xterm LC_ALL=$utf8 python3 - "$XZILE" <<'PY' 2>&1
+import codecs, fcntl, os, pty, re, select, struct, sys, termios, time, unicodedata
+
+ROWS, COLS = 24, 80
+cells = [[' '] * COLS for _ in range(ROWS)]
+attrs = [[''] * COLS for _ in range(ROWS)]
+y = x = 0
+attr = ''
+pending = ''
+
+def width(ch):
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in 'WF' else 1
+
+def feed(data):
+    """Draw the editor's output: cursor moves, clears, SGR and text."""
+    global y, x, attr, pending
+    text = pending + data
+    pending = ''
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '\x1b':
+            m = re.compile(r'\x1b\[([?0-9;]*)([A-Za-z])').match(text, i)
+            if not m:
+                if len(text) - i < 16:
+                    pending = text[i:]
+                    return
+                i += 1
+                continue
+            p, f = m.group(1), m.group(2)
+            if f == 'H':
+                a = (p.split(';') + ['1', '1'])[:2] if p else ['1', '1']
+                y, x = int(a[0] or 1) - 1, int(a[1] or 1) - 1
+            elif f == 'J':
+                for r in range(ROWS):
+                    cells[r] = [' '] * COLS
+                    attrs[r] = [''] * COLS
+            elif f == 'm':
+                v = [int(n) for n in p.split(';') if n] or [0]
+                k = 0
+                while k < len(v):
+                    if v[k] == 0:
+                        attr = ''
+                    elif v[k] == 1:
+                        attr += 'b'
+                    elif v[k] in (38, 48):
+                        k += 2 if k + 1 < len(v) and v[k + 1] == 5 else 4
+                    k += 1
+            i = m.end()
+            continue
+        i += 1
+        w = width(c)
+        if c < ' ' or w == 0:
+            continue
+        if 0 <= y < ROWS and 0 <= x < COLS:
+            cells[y][x] = c
+            attrs[y][x] = attr
+            if w == 2 and x + 1 < COLS:
+                cells[y][x + 1] = ''
+        x += w
+
+editor = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(editor, [editor, '--no-init-file', 'r.md'])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))
+decoder = codecs.getincrementaldecoder('utf-8')('replace')
+
+def pump(secs):
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return True
+        if select.select([fd], [], [], left)[0]:
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            feed(decoder.decode(d))
+
+def row(r):
+    return ''.join(cells[r]).rstrip()
+
+failed = []
+def expect(r, want):
+    if row(r) != want:
+        failed.append('row %d is %r, not %r' % (r, row(r), want))
+
+def keys(s):
+    os.write(fd, s.encode())
+    pump(0.3)
+
+def click(r, c):
+    os.write(fd, b'\x1b[<0;%d;%dM' % (c + 1, r + 1))
+    pump(0.1)
+    os.write(fd, b'\x1b[<0;%d;%dm' % (c + 1, r + 1))
+    pump(0.3)
+
+pump(1.5)
+expect(0, '# Title *one*')
+expect(1, 'Some bold and code here.')
+expect(2, '│ A │ B │')
+expect(3, '│───│───│')
+expect(4, '│ x │ y │')
+expect(5, '• ☐ task')
+expect(6, '数量 粗')
+if attrs[1][5] != 'b' or attrs[1][4] == 'b':
+    failed.append('row 1: "bold" is not drawn bold: %r' % attrs[1][3:10])
+click(1, 8)                     # bol|d
+keys('X')
+expect(1, 'Some **bolXd** and `code` here.')
+expect(0, 'Title one')
+click(5, 4)                     # |task
+keys('Y')
+click(6, 5)                     # |粗
+keys('W')
+click(0, 6)                     # |one
+keys('Z')
+expect(1, 'Some bolXd and code here.')
+keys('\x03\x16')                # C-c C-v
+expect(1, 'Some **bolXd** and `code` here.')
+expect(2, '| A | B |')
+keys('\x18\x13')
+keys('\x18\x03')
+deadline = time.time() + 5
+while pump(0.3) and time.time() < deadline:
+    pass
+os.waitpid(pid, 0)
+if failed:
+    print('\n'.join(failed))
+    sys.exit(1)
+PY
+)
+[ $? -eq 0 ] || fail "step 3: $errors"
+printf '%s\n' '# Title *Zone*' 'Some **bolXd** and `code` here.' '| A | B |' '|---|---|' \
+	'| x | y |' '- [ ] Ytask' '数量 **W粗**' | cmp -s - "$work/r.md" ||
+	fail "step 3: r.md is: $(cat "$work/r.md")"
+exit 0

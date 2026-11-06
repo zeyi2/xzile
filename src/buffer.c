@@ -400,6 +400,9 @@ buffer_replace_estr (Buffer *bp, size_t del, EstrView es)
 		/* If gap would vanish, open it to MIN_GAP. */
 		estr_insert (bp->text, pt, (newlen + MIN_GAP) - (oldgap + del));
 		bp->gap = MIN_GAP;
+		/* The text deleted is now at the end of the gap, where the
+		   line functions, which scan the gap, would find its EOLs. */
+		estr_set (bp->text, pt + newlen, '\0', MIN_GAP);
 	} else if (oldgap + del > MAX_GAP + newlen) {
 		/* If gap would be larger than MAX_GAP, restrict it to MAX_GAP. */
 		estr_remove (bp->text, pt + newlen + MAX_GAP, (oldgap + del) - (MAX_GAP + newlen));
@@ -814,6 +817,7 @@ buffer_free (Buffer *bp)
 	magit_free (bp);
 	preview_free (bp);
 	html_free (bp);
+	markdown_free (bp);
 	free (bp->mode_label);
 	undo_free_all (bp);
 	if (bp->vars != NULL)

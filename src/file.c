@@ -349,6 +349,7 @@ find_file (const char *filename)
 			undo_free_all (bp);
 			bp->modified = false;
 			html_after_visit (bp);
+			markdown_after_visit (bp);
 		}
 		buffer_note_disk (bp);
 	}
@@ -408,6 +409,7 @@ remote_file_buffer (Remote *r, const char *path, bool create, enum RemoteKind *k
 	bp->name = buffer_unique_name (base);
 	free (base);
 	buffer_set_highlighter (bp, filetype_resolve_highlighter (path));
+	markdown_after_visit (bp);
 	undo_free_all (bp);
 	bp->modified = false;
 	if (*kind == REMOTE_MISSING)

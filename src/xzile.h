@@ -327,6 +327,8 @@ typedef struct {
 	bool bold;
 	bool underline;
 	bool reverse;
+	bool italic;
+	bool strike;
 	bool has_foreground;
 	bool has_background;
 } TerminalStyle;
@@ -562,6 +564,7 @@ typedef struct Compilation Compilation;
 typedef struct Magit Magit;
 typedef struct Preview Preview;
 typedef struct Html Html;
+typedef struct Markdown Markdown;
 typedef struct Mode Mode;
 typedef struct CommentStyle CommentStyle;
 typedef struct Remote Remote;
@@ -636,6 +639,7 @@ struct Buffer {
 	Magit *magit;		/* Git interface state, or NULL. */
 	Preview *preview;	/* Image or PDF preview state, or NULL. */
 	Html *html;		/* HTML preview window state, or NULL. */
+	Markdown *markdown;	/* Markdown live preview state, or NULL. */
 	char *mode_label;	/* Mode line name overriding the highlighter's. */
 
 	const Mode *highlighter;
@@ -1260,6 +1264,26 @@ void html_after_visit (Buffer *bp);
 void html_free (Buffer *bp);
 void html_mode_init (void);
 
+/* Markdown, edited as source with a live preview of the lines that
+   point is not on (modes/markdown.c). */
+
+/* Choose markdown-mode for a Markdown file just visited, local or
+   remote. */
+void markdown_after_visit (Buffer *bp);
+void markdown_free (Buffer *bp);
+/* The highlighter of a buffer in markdown-mode, or NULL. */
+const Mode *markdown_highlighter (const Buffer *bp);
+/* Draw the text of the line at `lo' in `wp' at the cursor, `width'
+   columns from display column `startcol', if it is shown rendered
+   rather than as source; returns false, drawing nothing, if not. */
+bool markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, const Region *r);
+/* For a click on display column `col' (from the start of the line, as
+   for `goalc') of the line at `lo' in `wp', as last drawn: if it was
+   shown rendered, the offset it shows in `*o', and whether a character
+   of the line is there in `*on_text'. */
+bool markdown_cell_offset (Window *wp, size_t lo, size_t col, size_t *o, bool *on_text);
+void markdown_mode_init (void);
+
 /* bookmark.c */
 void bookmarks_load (void);
 void bookmark_init (void);
@@ -1339,10 +1363,31 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_LINK "link"
 #define FACE_LINK_HOVER "link-hover"
 #define FACE_TOOLTIP "tooltip"
+#define FACE_MARKDOWN_HEADER_1 "markdown-header-face-1"
+#define FACE_MARKDOWN_HEADER_2 "markdown-header-face-2"
+#define FACE_MARKDOWN_HEADER_3 "markdown-header-face-3"
+#define FACE_MARKDOWN_HEADER_4 "markdown-header-face-4"
+#define FACE_MARKDOWN_HEADER_5 "markdown-header-face-5"
+#define FACE_MARKDOWN_HEADER_6 "markdown-header-face-6"
+#define FACE_MARKDOWN_BOLD "markdown-bold-face"
+#define FACE_MARKDOWN_ITALIC "markdown-italic-face"
+#define FACE_MARKDOWN_STRIKE "markdown-strike-through-face"
+#define FACE_MARKDOWN_INLINE_CODE "markdown-inline-code-face"
+#define FACE_MARKDOWN_CODE "markdown-code-face"
+#define FACE_MARKDOWN_LINK "markdown-link-face"
+#define FACE_MARKDOWN_MARKUP "markdown-markup-face"
+#define FACE_MARKDOWN_BLOCKQUOTE "markdown-blockquote-face"
+#define FACE_MARKDOWN_LIST "markdown-list-face"
+#define FACE_MARKDOWN_TABLE "markdown-table-face"
+#define FACE_MARKDOWN_HR "markdown-hr-face"
+#define FACE_MARKDOWN_TASK_DONE "markdown-task-done-face"
 
 /* Resolve `face_name' in the current theme for the current terminal.
    Returns false for unknown faces. */
 bool resolve_terminal_style (const char *face_name, TerminalStyle *style);
+/* The faces `faces' (`n' of them, NULL ones skipped) drawn over one
+   another, later ones taking precedence; false if none is known. */
+bool resolve_terminal_faces (const char *const *faces, size_t n, TerminalStyle *style);
 void theme_init (void);
 
 /*--------------------------------------------------------------------------

@@ -23,6 +23,15 @@ browser engine window,
 .BR xzile-html-preview :
 WebKitGTK on Linux, WKWebView on macOS.
 .PP
+Markdown files (\fI.md\fR, \fI.markdown\fR, \fI.mdown\fR) are edited in
+\fBmarkdown-mode\fR, in both programs: the text stays the source, and
+every line but point's (and a region's) is drawn rendered, with its
+markup hidden.
+C-c C-v (\fBmarkdown-toggle-source\fR) shows all of the source,
+C-c C-a (\fBmarkdown-table-align\fR) aligns a pipe table,
+C-c C-s b, i and c make the region bold, italic or code, and
+C-c C-x C-x (\fBmarkdown-toggle-task\fR) checks a task box.
+.PP
 In the file picker of \fBfind-file\fR (C-x C-f) and \fBdired\fR (C-x d),
 M-l chooses a location: this machine, or another reached with
 .BR ssh (1)

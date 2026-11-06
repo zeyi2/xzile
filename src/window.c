@@ -412,6 +412,22 @@ mouse_leaf (size_t *y, size_t *x)
 	return leaf;
 }
 
+/* The start of the line shown at row `y' of `wp', or NOPOS if there
+   is none; the top line is found as redisplay finds it. */
+static size_t
+line_at_row (Window *wp, size_t y)
+{
+	Buffer *bp = wp->bp;
+	size_t o = window_o (wp), line = buffer_offset_to_line (bp, o);
+	long n = (long) y - (long) MIN (wp->topdelta, line);
+	size_t l = buffer_start_of_line (bp, o);
+	for (; n < 0 && l != NOPOS; n++)
+		l = buffer_prev_line (bp, l);
+	for (; n > 0 && l != NOPOS; n--)
+		l = buffer_next_line (bp, l);
+	return l;
+}
+
 /* Move point to the text shown at row `y', column `x' of the current
    window. Returns whether a character is shown there, rather than the
    gutter or the space after a line or after the buffer. */
@@ -421,11 +437,21 @@ move_point_to_cell (size_t y, size_t x)
 	if (shell_char_mode (cur_bp) || preview_showing (cur_bp))
 		return false;
 	y = MIN (y, cur_wp->eheight > 0 ? cur_wp->eheight - 1 : 0);
+	size_t gutter = cur_wp->gutter_width;
+	size_t goalc = (x > gutter ? x - gutter : 0) + cur_wp->start_column;
+	/* A rendered Markdown line is mapped as it was drawn, before point
+	   gets there and shows it as source. */
+	size_t lo = line_at_row (cur_wp, y), o;
+	bool on_text;
+	if (lo != NOPOS && markdown_cell_offset (cur_wp, lo, goalc, &o, &on_text)) {
+		buffer_goto_offset (cur_bp, o);
+		cur_bp->goalc = buffer_calculate_goalc (cur_bp, o);
+		return x >= gutter && on_text;
+	}
 	/* The top line, as redisplay finds it. */
 	size_t line = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
 	bool moved = buffer_move_line (cur_bp, (long) y - (long) MIN (cur_wp->topdelta, line));
-	size_t gutter = cur_wp->gutter_width;
-	cur_bp->goalc = (x > gutter ? x - gutter : 0) + cur_wp->start_column;
+	cur_bp->goalc = goalc;
 	buffer_goto_goalc (cur_bp);
 	return moved && x >= gutter && !buffer_eolp (cur_bp);
 }
@@ -460,18 +486,19 @@ text_at_cell (Window *wp, size_t y, size_t x, size_t *lo, size_t *i)
 	size_t gutter = wp->gutter_width;
 	if (x < gutter)
 		return false;
-	size_t o = window_o (wp), line = buffer_offset_to_line (bp, o);
-	long n = (long) y - (long) MIN (wp->topdelta, line);
-	size_t l = buffer_start_of_line (bp, o);
-	for (; n < 0 && l != NOPOS; n++)
-		l = buffer_prev_line (bp, l);
-	for (; n > 0 && l != NOPOS; n--)
-		l = buffer_next_line (bp, l);
+	size_t l = line_at_row (wp, y);
 	if (l == NOPOS)
 		return false;
 
+	size_t goalc = x - gutter + wp->start_column, o;
+	bool on_text;
+	if (markdown_cell_offset (wp, l, goalc, &o, &on_text)) {
+		*lo = l;
+		*i = o - l;
+		return on_text;
+	}
 	/* As buffer_goto_goalc. */
-	size_t goalc = x - gutter + wp->start_column, col = 0, t = buffer_tab_width (bp);
+	size_t col = 0, t = buffer_tab_width (bp);
 	size_t j = l, end = buffer_end_of_line (bp, l);
 	while (j < end && col < goalc) {
 		size_t len;

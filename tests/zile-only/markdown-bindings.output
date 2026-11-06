@@ -1,0 +1,6 @@
+C-c C-a runs the command markdown-table-align, which is an interactive built-in
+C-c C-v runs the command markdown-toggle-source, which is an interactive built-in
+Here is a sample file.
+It has several lines.
+
+And more than one paragraph.
