@@ -124,6 +124,11 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 	/* References that a click would follow, shown as links. */
 	LinkSpan *spans = NULL;
 	size_t nspans = links && line_len > 0 ? reference_line_links (bp, o, &spans) : 0, k = 0;
+	/* The matches of a search running. */
+	LinkSpan *matches;
+	size_t nmatches = search_line_matches (wp, o, line_len, &matches), m = 0;
+	size_t cur_start, cur_end;
+	bool have_cur = search_current_match (wp, &cur_start, &cur_end);
 
 	size_t i = 0;	/* byte index within the line */
 	size_t col = 0;	/* accumulated display column (from line start) */
@@ -156,11 +161,16 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 			face_name = paren_face;
 			plain = false;
 		}
-		term_apply_face (in_highlight ? FACE_REGION : face_name);
+		while (m < nmatches && matches[m].end <= i)
+			m++;
+		const char *shown = have_cur && o + i >= cur_start && o + i < cur_end ? FACE_ISEARCH
+			: m < nmatches && i >= matches[m].start ? FACE_LAZY_HIGHLIGHT
+			: in_highlight ? FACE_REGION : face_name;
+		term_apply_face (shown);
 		while (k < nspans && spans[k].end <= i)
 			k++;
 		if (k < nspans && i >= spans[k].start)
-			term_mark_link (plain && !in_highlight);
+			term_mark_link (plain && shown == face_name);
 
 		if (col < startcol) {
 			/* A character straddling the start column. */
@@ -203,6 +213,7 @@ draw_line (size_t line, size_t leftcol, size_t startcol, Window *wp,
 	}
 	free (syntax_faces);
 	free (spans);
+	free (matches);
 
 	/* Draw end-of-line indicator or padding. */
 	if (x >= ew && i < line_len) {

@@ -1,0 +1,152 @@
+#!/bin/sh
+# The matches of an incremental search are highlighted and counted
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. The editor runs on a
+# pseudo-terminal made by Python, which reads what the editor draws
+# and types the keys; without python3 the test is skipped. Prints why
+# on failure.
+
+set -u
+
+command -v python3 >/dev/null 2>&1 || exit 0
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-isearch.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/home"
+printf 'apple one\nbanana Apple two\nthree\napple four apple\n' > "$work/s.txt"
+
+cat > "$work/drive.py" <<'PY'
+import fcntl, os, pty, re, select, struct, sys, termios, time
+
+ROWS, COLS = 24, 80
+cells = [[' '] * COLS for _ in range(ROWS)]
+attrs = [[()] * COLS for _ in range(ROWS)]
+y = x = 0
+attr = ()
+pending = ''
+
+def feed(text):
+    """Draw the editor's output: cursor moves, clears, SGR and text."""
+    global y, x, attr, pending
+    text = pending + text
+    pending = ''
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '\x1b':
+            m = re.compile(r'\x1b\[([?0-9;]*)([A-Za-z])').match(text, i)
+            if not m:
+                if len(text) - i < 16:
+                    pending = text[i:]
+                    return
+                i += 1
+                continue
+            p, f = m.group(1), m.group(2)
+            if f == 'H':
+                a = (p.split(';') + ['1', '1'])[:2] if p else ['1', '1']
+                y, x = int(a[0] or 1) - 1, int(a[1] or 1) - 1
+            elif f == 'J':
+                for r in range(ROWS):
+                    cells[r] = [' '] * COLS
+                    attrs[r] = [()] * COLS
+            elif f == 'm':
+                v = [n for n in p.split(';') if n] or ['0']
+                if v[0] == '0':
+                    attr, v = (), v[1:]
+                attr = attr + tuple(v)
+            i = m.end()
+            continue
+        i += 1
+        if c >= ' ' and 0 <= y < ROWS and 0 <= x < COLS:
+            cells[y][x] = c
+            attrs[y][x] = attr
+        x += 1
+
+editor = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(editor, [editor, '--no-init-file', 's.txt'])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))
+
+def pump(secs):
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return True
+        if select.select([fd], [], [], left)[0]:
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            feed(d.decode('utf-8', 'replace'))
+
+def keys(s):
+    os.write(fd, s.encode())
+    pump(0.4)
+
+failed = []
+def look(r, c):
+    """How the 5 cells from row `r', column `c' look, if alike."""
+    seen = set(attrs[r][c:c + 5])
+    if len(seen) != 1:
+        failed.append('row %d, columns %d-%d look unalike: %r' % (r, c, c + 4, attrs[r][c:c + 5]))
+    return seen.pop()
+
+def prompt(want):
+    got = ''.join(cells[ROWS - 1]).rstrip()
+    if got != want:
+        failed.append('the prompt is %r, not %r' % (got, want))
+
+# The matches, ignoring case: rows 0, 1, 3 and 3 again.
+places = [(0, 0), (1, 7), (3, 0), (3, 11)]
+pump(1)
+plain = [look(r, c) for r, c in places]
+keys('\x13apple')
+prompt('1/4 I-search: apple')
+shown = [look(r, c) for r, c in places]
+current, lazy = shown[0], shown[1]
+if not (current != lazy and lazy not in plain and current not in plain):
+    failed.append('step 1: the current match, the others and the text look %r, %r, %r'
+                  % (current, lazy, plain))
+if shown[2:] != [lazy, lazy]:
+    failed.append('step 1: the other matches look %r, not %r' % (shown[2:], lazy))
+keys('\x13')
+prompt('2/4 I-search: apple')
+if [look(r, c) for r, c in places] != [lazy, current, lazy, lazy]:
+    failed.append('step 2: C-s did not move the current match to the second')
+keys('\x07')
+if [look(r, c) for r, c in places] != plain:
+    failed.append('step 3: C-g left matches highlighted')
+keys('\x13appl\x7fle x')
+prompt('0 Failing I-search: apple x')
+if [look(r, c) for r, c in places] != plain:
+    failed.append('step 4: a failing search highlighted matches of another string')
+keys('\x07\x07\x18\x03')
+pump(2)
+print('\n'.join(failed))
+sys.exit(1 if failed else 0)
+PY
+
+errors=$(cd "$work" && HOME=$work/home TERM=xterm-256color python3 drive.py "$XZILE" 2>&1)
+[ $? -eq 0 ] || { printf '%s\n' "$errors"; exit 1; }
+exit 0

@@ -1,0 +1,28 @@
+# An incremental search shows the match it is at in the isearch face
+# and the other matches in the lazy-highlight face, moving the first
+# with C-s; once it ends, the text looks as before.
+sample plain-a 1 7
+sample plain-0 0 0
+down s ctrl
+up s ctrl
+sleep 200
+text apple
+sleep 300
+sample current 0 0
+sample lazy 1 7
+differ plain-0 current
+differ plain-a lazy
+differ current lazy
+down s ctrl
+up s ctrl
+sleep 300
+sample current-a 1 7
+sample lazy-0 0 0
+same current current-a
+same lazy lazy-0
+down Return
+up Return
+sleep 300
+sample after 1 7
+same plain-a after
+text X

@@ -1294,6 +1294,13 @@ void markdown_mode_init (void);
 void bookmarks_load (void);
 void bookmark_init (void);
 
+/* search.c */
+/* While an incremental search or query-replace runs in the buffer of
+   `wp', the match it is at, as offsets [*start, *end). */
+bool search_current_match (const Window *wp, size_t *start, size_t *end);
+/* Its matches in the line at `lo' of `len' bytes, in `wp', as bytes of
+   the line in `*spans' (to free), in order. */
+size_t search_line_matches (const Window *wp, size_t lo, size_t len, LinkSpan **spans);
 void search_init (void);
 void shell_init (void);
 void registers_init (void);

@@ -187,6 +187,12 @@ GNU Zile NEWS                                         -*- outline -*-
   Buffers can have their own key bindings, which take precedence over
   the global ones.
 
+  Incremental search (C-s, C-r and their regexp forms) highlights the
+  match it is at in the isearch face and the other matches on the
+  screen in the lazy-highlight face, and its prompt counts them: "2/7
+  I-search: foo" is the second match of seven in the buffer. While
+  query-replace asks, its match and the others are highlighted so too.
+
 ** Miscellaneous
 
   XZile has been rewritten in C.

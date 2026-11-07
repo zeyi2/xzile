@@ -40,24 +40,36 @@ no_upper (const char *s, size_t len, bool regex)
 
 static const char *re_find_err = NULL;
 
-static long
-find_substr (EstrView es, const char *n, bool forward, int before, int after, bool regex, bool icase)
+/* Whether a search for `s' ignores case. */
+static bool
+search_icase (const char *s, bool regexp)
+{
+	return get_variable_bool ("case-fold-search") && no_upper (s, strlen (s), regexp);
+}
+
+/* Find `n' in `es', setting its match to bytes [*start, *end). */
+static bool
+find_substr (EstrView es, const char *n, bool forward, int before, int after, bool regex, bool icase,
+	     size_t *start, size_t *end)
 {
 	long ret = -1;
 	Regex *re = regex_compile (n, strlen (n), !regex, icase, &re_find_err);
 	if (re != NULL) {
-		size_t end;
-		ret = regex_search (re, es.text, es.len, forward, before, after, &end);
+		ret = regex_search (re, es.text, es.len, forward, before, after, end);
 		if (ret == REGEX_TOO_COMPLEX) {
 			re_find_err = "Stack overflow in regexp matcher";
 			ret = -1;
 		}
-		if (ret >= 0 && forward)
-			ret = (long) end;
 		regex_free (re);
 	}
-	return ret;
+	if (ret < 0)
+		return false;
+	*start = (size_t) ret;
+	return true;
 }
+
+/* The match the last successful search found, [match_start, match_end). */
+static size_t match_start, match_end;
 
 static bool
 search (const char *s, bool forward, bool regexp)
@@ -71,14 +83,155 @@ search (const char *s, bool forward, bool regexp)
 	int before = o > 0 ? (unsigned char) buffer_get_char (cur_bp, o - 1) : -1;
 	int after = o < len ? (unsigned char) buffer_get_char (cur_bp, o) : -1;
 	EstrView es = forward ? buffer_post_point (cur_bp) : buffer_pre_point (cur_bp);
-	long pos = find_substr (es, s, forward, forward ? before : -1, forward ? -1 : after, regexp,
-				get_variable_bool ("case-fold-search") && no_upper (s, strlen (s), regexp));
-	if (pos < 0)
+	size_t start, end;
+	if (!find_substr (es, s, forward, forward ? before : -1, forward ? -1 : after, regexp,
+			  search_icase (s, regexp), &start, &end))
 		return false;
 
-	buffer_goto_offset (cur_bp, (size_t) pos + (forward ? o : 0));
+	size_t base = forward ? o : 0;
+	match_start = base + start;
+	match_end = base + end;
+	buffer_goto_offset (cur_bp, forward ? match_end : match_start);
 	thisflag |= FLAG_NEED_RESYNC;
 	return true;
+}
+
+
+/*
+ * Highlighting the matches of a search.
+ */
+
+/* The search shown: its pattern, compiled, in the buffer searched, and
+   the current match, if `have_current'. */
+static Regex *shown_re;
+static const Buffer *shown_bp;
+static bool have_current;
+static size_t current_start, current_end;
+
+/* Counting stops after this many matches, and bigger buffers are not
+   counted, as that is done at each key. */
+#define COUNT_MAX 9999
+#define COUNT_MAX_BYTES (8 * 1024 * 1024)
+
+static void
+hide_matches (void)
+{
+	regex_free (shown_re);
+	shown_re = NULL;
+	shown_bp = NULL;
+	have_current = false;
+}
+
+/* Show the matches of `s' in the current buffer, the current one being
+   the last found if `found'. */
+static void
+show_matches (const char *s, bool regexp, bool found)
+{
+	hide_matches ();
+	if (s[0] == '\0')
+		return;
+	const char *err;
+	shown_re = regex_compile (s, strlen (s), !regexp, search_icase (s, regexp), &err);
+	if (shown_re == NULL)
+		return;
+	shown_bp = cur_bp;
+	have_current = found;
+	current_start = match_start;
+	current_end = match_end;
+}
+
+/* Call `f' on each non-empty match of the search shown in `text', of
+   `len' bytes, with `before' and `after' the bytes around it or -1,
+   until it returns false. */
+static void
+each_match (const char *text, size_t len, int before, int after,
+	    bool (*f) (size_t start, size_t end, void *data), void *data)
+{
+	for (size_t pos = 0; pos <= len;) {
+		size_t end;
+		int b = pos > 0 ? (unsigned char) text[pos - 1] : before;
+		long start = regex_search (shown_re, text + pos, len - pos, true, b, after, &end);
+		if (start < 0)
+			return;
+		size_t s = pos + (size_t) start, e = pos + end;
+		if (e > s && !f (s, e, data))
+			return;
+		pos = e > s ? e : s + 1;
+	}
+}
+
+typedef struct {
+	size_t n, before;	/* The matches, and those before the current. */
+} Count;
+
+static bool
+count_match (size_t start, size_t end, void *data)
+{
+	(void) end;
+	Count *c = data;
+	if (have_current && start < current_start)
+		c->before++;
+	return ++c->n < COUNT_MAX;
+}
+
+/* How many matches of the search shown the buffer has, as "N/M " with
+   the current one N, or "M " if there is none; "" if there is no
+   search. */
+static char *
+count_matches (void)
+{
+	if (shown_re == NULL || buffer_length (shown_bp) > COUNT_MAX_BYTES)
+		return xstrdup ("");
+	Estr *text = buffer_get_region (shown_bp, region_new (0, buffer_length (shown_bp)));
+	Count c = { 0, 0 };
+	each_match (text->text, text->len, -1, -1, count_match, &c);
+	estr_free (text);
+	const char *more = c.n >= COUNT_MAX ? "+" : "";
+	return have_current ? xasprintf ("%zu/%zu%s ", c.before + 1, c.n, more) : xasprintf ("%zu%s ", c.n, more);
+}
+
+bool
+search_current_match (const Window *wp, size_t *start, size_t *end)
+{
+	if (shown_re == NULL || wp->bp != shown_bp || !have_current)
+		return false;
+	*start = current_start;
+	*end = current_end;
+	return true;
+}
+
+typedef struct {
+	LinkSpan *v;
+	size_t n, cap;
+} Spans;
+
+static bool
+add_span (size_t start, size_t end, void *data)
+{
+	Spans *s = data;
+	if (s->n == s->cap) {
+		s->cap = s->cap ? 2 * s->cap : 8;
+		s->v = xrealloc (s->v, s->cap * sizeof *s->v);
+	}
+	s->v[s->n++] = (LinkSpan) { start, end };
+	return true;
+}
+
+size_t
+search_line_matches (const Window *wp, size_t lo, size_t len, LinkSpan **spans)
+{
+	*spans = NULL;
+	if (shown_re == NULL || wp->bp != shown_bp || len == 0)
+		return 0;
+	Buffer *bp = wp->bp;
+	Estr *line = buffer_get_region (bp, region_new (lo, lo + len));
+	int before = lo > 0 ? (unsigned char) buffer_get_char (bp, lo - 1) : -1;
+	int after = lo + len < buffer_length (bp) ? (unsigned char) buffer_get_char (bp, lo + len) : -1;
+	Spans s = { NULL, 0, 0 };
+	each_match (line->text, line->len, before, after, add_span, &s);
+	estr_free (line);
+	*spans = s.v;
+	return s.n;
 }
 
 static char *last_search = NULL;
@@ -137,10 +290,12 @@ isearch (bool forward, bool regexp)
 		/* Make the minibuf message. */
 		StrBuf msg;
 		sb_init (&msg);
-		sb_addf (&msg, "%sI-search%s: %s",
+		char *count = count_matches ();
+		sb_addf (&msg, "%s%sI-search%s: %s", count,
 			 last ? (regexp ? "Regexp " : "") : (regexp ? "Failing regexp " : "Failing "),
 			 forward ? "" : " backward",
 			 pattern.s);
+		free (count);
 
 		/* Regex error. */
 		if (re_find_err != NULL) {
@@ -222,14 +377,15 @@ isearch (bool forward, bool regexp)
 			last = search (pattern.s, forward, regexp);
 		} else
 			last = true;
+		show_matches (pattern.len > 0 ? pattern.s : "", regexp, pattern.len > 0 && last);
 
-		if (thisflag & FLAG_NEED_RESYNC) {
+		if (thisflag & FLAG_NEED_RESYNC)
 			window_resync (cur_wp);
-			term_redisplay ();
-		}
+		term_redisplay ();
 	}
 
 	/* done */
+	hide_matches ();
 	cur_wp->bp->isearch = false;
 
 	marker_free (old_mark);
@@ -346,8 +502,10 @@ F_query_replace (long uniarg, Args *args)
 			if (thisflag & FLAG_NEED_RESYNC)
 				window_resync (cur_wp);
 
+			show_matches (find, false, true);
 			minibuf_write ("Query replacing `%s' with `%s' (y, n, !, ., q)? ", find, repl);
 			c = getkey (GETKEY_DEFAULT);
+			hide_matches ();
 			minibuf_clear ();
 
 			if (c == 'q')			/* Quit immediately. */
@@ -421,6 +579,9 @@ search_init (void)
 		       "With a prefix argument, do an incremental regular expression search instead.\n"
 		       "\n"
 		       "As you type characters, they add to the search string and are found.\n"
+		       "The match found is shown in the `isearch' face, the other matches on\n"
+		       "the screen in the `lazy-highlight' face, and the prompt counts them:\n"
+		       "\"2/7 I-search\" is at the second match of seven in the buffer.\n"
 		       "\n"
 		       "Type \\[isearch-exit] to exit, leaving point at location found.\n"
 		       "Type \\[isearch-repeat-forward] to search again forward, \\[isearch-repeat-backward] to search again backward.\n"
