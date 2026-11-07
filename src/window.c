@@ -600,6 +600,8 @@ F_mouse_set_point (long uniarg, Args *args)
 		window_set_current (leaf->wp);
 	cur_bp->mark_active = false;
 	if (y < cur_wp->eheight) {
+		if (shell_char_mode (cur_bp))
+			shell_select_start (cur_wp, y, x);
 		bool on_text = move_point_to_cell (y, x);
 		link_followed = x < cur_wp->ewidth && follow_link (y, x, on_text);
 	}
@@ -620,6 +622,10 @@ F_mouse_drag_region (long uniarg, Args *args)
 	WinNode *leaf = find_leaf_for (cur_wp);
 	y = y > leaf->y ? y - leaf->y : 0;
 	x = x > leaf->x ? x - leaf->x : 0;
+	if (shell_char_mode (cur_bp)) {
+		shell_select_extend (cur_wp, y, x);
+		return true;
+	}
 	if (!cur_bp->mark_active) {
 		set_mark ();
 		cur_bp->mark_active = true;
@@ -696,7 +702,8 @@ window_init (void)
 		       "is visited in the window to the left (see `shell').");
 
 	lisp_func_new ("mouse-drag-region", F_mouse_drag_region, true,
-		       "Set the region to the text the mouse is dragged over.");
+		       "Set the region to the text the mouse is dragged over.\n"
+		       "In a terminal, select the text on the screen instead (see `shell').");
 
 	lisp_func_new ("mwheel-scroll-up", F_mwheel_scroll_up, true,
 		       "Scroll the window under the mouse forward a few lines.");

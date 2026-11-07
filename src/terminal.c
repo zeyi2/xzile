@@ -25,7 +25,7 @@
    for the usual C-x commands (C-x C-x sends C-x itself), and M-x.
    Mouse events go to a program that has asked for them; otherwise a
    click on a FILE:LINE[:COL] reference visits it (see follow_link in
-   window.c).
+   window.c), and a drag selects text on the screen, copied on release.
    In line mode (C-x C-j), the buffer holds the scrollback and screen
    as ordinary read-only text; C-x C-k or q returns to char mode. */
 
@@ -44,6 +44,13 @@ struct Shell {
 	char *foreign_host;	/* The host named by the last OSC 7, if it
 				   is not the terminal's machine; or NULL. */
 	bool line_mode;
+	/* The cells selected with the mouse, from where the drag started
+	   to where it is, both included. Rows count from the first line
+	   ever shown (see vterm_scrolled), so that the selection moves up
+	   with its text. */
+	bool selecting, selected;
+	size_t sel_row[2];
+	int sel_col[2];
 };
 
 static Binding *char_map, *line_map;
@@ -270,13 +277,46 @@ row_links (Buffer *bp, int y, size_t *at, bool *link_col)
 	sb_free (&sb);
 }
 
+/* The selection, in reading order: from row `*r0', column `*c0' to
+   row `*r1', column `*c1'. */
+static void
+selection_bounds (const Shell *sh, size_t *r0, int *c0, size_t *r1, int *c1)
+{
+	int first = sh->sel_row[0] < sh->sel_row[1] ||
+		(sh->sel_row[0] == sh->sel_row[1] && sh->sel_col[0] <= sh->sel_col[1]) ? 0 : 1;
+	*r0 = sh->sel_row[first];
+	*c0 = sh->sel_col[first];
+	*r1 = sh->sel_row[1 - first];
+	*c1 = sh->sel_col[1 - first];
+}
+
+/* Whether column `x' of screen row `y' is selected. */
+static bool
+cell_selected (const Shell *sh, int y, int x)
+{
+	if (!sh->selected)
+		return false;
+	size_t r0, r1, r = vterm_scrolled (sh->vt) + (size_t) y;
+	int c0, c1;
+	selection_bounds (sh, &r0, &c0, &r1, &c1);
+	return r >= r0 && r <= r1 && (r > r0 || x >= c0) && (r < r1 || x <= c1);
+}
+
+static void
+clear_selection (Shell *sh)
+{
+	sh->selecting = sh->selected = false;
+}
+
 static bool tracks_mouse (const Window *wp);
 static void
-put_vcell (const VCell *c, bool link)
+put_vcell (const VCell *c, bool link, bool selected)
 {
 	VAttr a = c->attr;
 	term_set_vattr (&a);
-	if (link)
+	if (selected)
+		term_apply_face (FACE_REGION);
+	else if (link)
 		term_mark_link (a.fg == VCOLOR_DEFAULT && !(a.flags & VATTR_REVERSE));
 	if (c->cp == ' ' || c->cp == 0 || (a.flags & VATTR_INVISIBLE))
 		term_addch (' ');
@@ -300,6 +340,7 @@ shell_draw (Window *wp, size_t topline, size_t leftcol)
 	if (is_primary_window (wp) && (rows != vterm_rows (sh->vt) || cols != vterm_cols (sh->vt))) {
 		vterm_resize (sh->vt, rows, cols);
 		process_resize (sh->proc, rows, cols);
+		clear_selection (sh);
 	}
 
 	int vrows = vterm_rows (sh->vt), vcols = vterm_cols (sh->vt);
@@ -322,7 +363,9 @@ shell_draw (Window *wp, size_t topline, size_t leftcol)
 					term_addch (' ');
 					continue;
 				}
-				put_vcell (c, links && link_col[x]);
+				bool selected = cell_selected (sh, (int) y, (int) x) ||
+					(c->width == 2 && cell_selected (sh, (int) y, (int) x + 1));
+				put_vcell (c, links && link_col[x], selected);
 				if (c->width == 2)
 					x++;
 			}
@@ -442,6 +485,7 @@ enter_char_mode (Shell *sh)
 	bp->readonly = true;
 	bp->modified = false;
 	sh->line_mode = false;
+	clear_selection (sh);
 	bp->keymap = char_map;
 	update_mode_label (sh);
 }
@@ -495,6 +539,7 @@ send (const char *s, size_t len)
 		ding ();
 		return;
 	}
+	clear_selection (sh);
 	process_send (sh->proc, s, len);
 }
 
@@ -756,6 +801,98 @@ shell_link_at (Window *wp, size_t y, size_t x, size_t *x0, size_t *x1, char **ta
 	return ok;
 }
 
+/* Set end `end' of the selection in `wp' to row `y', column `x' of
+   its screen, kept on the screen. */
+static void
+set_selection_end (Window *wp, int end, size_t y, size_t x)
+{
+	Shell *sh = wp->bp->shell;
+	int rows = vterm_rows (sh->vt), cols = vterm_cols (sh->vt);
+	int row = (int) MIN (y, (size_t) rows - 1), col = (int) MIN (x, (size_t) cols - 1);
+	/* The right half of a wide character is the character. */
+	if (col > 0 && vterm_cell (sh->vt, row, col)->width == 0)
+		col--;
+	sh->sel_row[end] = vterm_scrolled (sh->vt) + (size_t) row;
+	sh->sel_col[end] = col;
+}
+
+void
+shell_select_start (Window *wp, size_t y, size_t x)
+{
+	if (!shell_char_mode (wp->bp))
+		return;
+	Shell *sh = wp->bp->shell;
+	clear_selection (sh);
+	sh->selecting = true;
+	set_selection_end (wp, 0, y, x);
+	set_selection_end (wp, 1, y, x);
+}
+
+void
+shell_select_extend (Window *wp, size_t y, size_t x)
+{
+	if (!shell_char_mode (wp->bp) || !wp->bp->shell->selecting)
+		return;
+	Shell *sh = wp->bp->shell;
+	set_selection_end (wp, 1, y, x);
+	sh->selected = true;
+}
+
+/* Put the selected text of the current terminal in the kill ring, and
+   so on the clipboard; false if nothing is selected. Rows that have
+   scrolled off the screen are left out. */
+static bool
+copy_selection (void)
+{
+	Shell *sh = cur_bp->shell;
+	if (sh == NULL || sh->line_mode || !sh->selected)
+		return false;
+	size_t r0, r1, top = vterm_scrolled (sh->vt);
+	int c0, c1, rows = vterm_rows (sh->vt), cols = vterm_cols (sh->vt);
+	selection_bounds (sh, &r0, &c0, &r1, &c1);
+	StrBuf sb;
+	sb_init (&sb);
+	for (size_t r = MAX (r0, top); r <= r1 && r < top + (size_t) rows; r++) {
+		int from = r == r0 ? c0 : 0, to = r == r1 ? c1 : cols - 1;
+		if (r > MAX (r0, top))
+			sb_addc (&sb, '\n');
+		const VCell *cells = vterm_cell (sh->vt, (int) (r - top), 0);
+		/* A wide character at the end is taken whole. */
+		if (to + 1 < cols && cells[to].width == 2)
+			to++;
+		add_cells (&sb, cells + from, (size_t) (to - from + 1));
+	}
+	estr_free (kill_ring_text);
+	kill_ring_text = NULL;
+	kill_ring_push (ev_of (sb.s != NULL ? sb.s : "", sb.len, eol_lf));
+	sb_free (&sb);
+	return true;
+}
+
+static bool
+F_term_mouse_release (long uniarg, Args *args)
+{
+	(void) uniarg;
+	(void) args;
+	if (cur_bp->shell == NULL)
+		return false;
+	cur_bp->shell->selecting = false;
+	copy_selection ();
+	return true;
+}
+
+static bool
+F_term_copy (long uniarg, Args *args)
+{
+	if (!check_shell ())
+		return false;
+	if (copy_selection ()) {
+		clear_selection (cur_bp->shell);
+		return true;
+	}
+	return F_term_send_raw (uniarg, args);
+}
+
 static bool
 F_term_paste (long uniarg, Args *args)
 {
@@ -802,6 +939,8 @@ init_maps (void)
 	keymap_bind (char_map, "\\C-x\\C-j", "term-line-mode");
 	keymap_bind (char_map, "\\C-x\\C-k", "term-char-mode");
 	keymap_bind (char_map, "\\C-x\\C-y", "term-paste");
+	keymap_bind (char_map, "\\M-w", "term-copy");
+	keymap_bind (char_map, "\\UPMOUSE1", "term-mouse-release");
 	keymap_bind (char_map, "\\M-x", "execute-extended-command");
 
 	line_map = keymap_new ();
@@ -1039,10 +1178,12 @@ terminal_init (void)
 		       "is ordinary text; C-x C-k or q returns to char mode.\n"
 		       "\n"
 		       "A program that reads the mouse gets the clicks, drags and wheel\n"
-		       "in its window. Otherwise, a click on a FILE:LINE[:COL] reference\n"
-		       "visits that place in the window on the left, splitting a sole window\n"
-		       "side by side for it; a terminal that reports another host by OSC 7,\n"
-		       "or runs ssh in the foreground, refuses this.");
+		       "in its window. Otherwise, dragging selects text on the screen and\n"
+		       "copies it to the kill ring and the clipboard; M-w (Command-C in\n"
+		       "xzile-gui) copies the selection again. A click on a FILE:LINE[:COL]\n"
+		       "reference visits that place in the window on the left, splitting a\n"
+		       "sole window side by side for it; a terminal that reports another\n"
+		       "host by OSC 7, or runs ssh in the foreground, refuses this.");
 	lisp_func_new ("term", F_term, true,
 		       "Run PROGRAM in a terminal buffer named *terminal*.\n"
 		       "In a remote buffer, run it on its machine, in its directory there,\n"
@@ -1054,6 +1195,13 @@ terminal_init (void)
 		       "Send C-x to the terminal's program.");
 	lisp_func_new ("term-paste", F_term_paste, true,
 		       "Send the last killed text to the terminal, as if pasted.");
+	lisp_func_new ("term-copy", F_term_copy, true,
+		       "Copy the text selected with the mouse in the terminal to the kill\n"
+		       "ring and the clipboard, and drop the selection. With no selection,\n"
+		       "send the key typed to the terminal's program.");
+	lisp_func_new ("term-mouse-release", F_term_mouse_release, false,
+		       "End a drag of the mouse in the terminal, copying the text selected\n"
+		       "to the kill ring and the clipboard.");
 	lisp_func_new ("term-line-mode", F_term_line_mode, true,
 		       "Show the terminal's scrollback and screen as text, for moving around,\n"
 		       "searching and copying. C-x C-k or q returns to char mode.");

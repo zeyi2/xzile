@@ -255,9 +255,9 @@ typedef unsigned Keystroke;
 #define KBD_BRACKETED_PASTE 00434u
 #define KBD_ESCAPE 00435u	/* A bare ESC, in terminal buffers. */
 /* Mouse events; term_mouse_position gives the cell they happened at.
-   Frontends send releases, drags of buttons 2 and 3, and presses of
-   buttons 2 and 3 only for terminal programs that read the mouse (see
-   shell_mouse_at). */
+   Frontends send releases of buttons 2 and 3, drags of buttons 2 and 3,
+   and presses of buttons 2 and 3 only for terminal programs that read
+   the mouse (see shell_mouse_at). */
 #define KBD_MOUSE_1 00436u
 #define KBD_DRAG_MOUSE_1 00437u
 #define KBD_WHEEL_UP 00440u
@@ -424,6 +424,8 @@ enum VMouseAction { VMOUSE_PRESS, VMOUSE_RELEASE, VMOUSE_DRAG };
    program does not track such events. */
 bool vterm_mouse (VTerm *t, int button, enum VMouseAction action, int y, int x);
 size_t vterm_scrollback_len (const VTerm *t);
+/* How many lines have ever scrolled off the top of the main screen. */
+size_t vterm_scrolled (const VTerm *t);
 const VCell *vterm_scrollback_line (const VTerm *t, size_t i, size_t *len);
 
 void term_set_vattr (const VAttr *a);
@@ -1121,6 +1123,10 @@ bool shell_follow_link (Window *wp, size_t y, size_t x);
    [*x0, *x1) of row `y' of the terminal in `wp', and what it names in
    `*target' (to free); false if there is none. */
 bool shell_link_at (Window *wp, size_t y, size_t x, size_t *x0, size_t *x1, char **target);
+/* Start a selection with the mouse at row `y', column `x' of the
+   terminal in `wp', or extend it to there. */
+void shell_select_start (Window *wp, size_t y, size_t x);
+void shell_select_extend (Window *wp, size_t y, size_t x);
 void shell_free (Buffer *bp);
 const char *shell_directory (const Buffer *bp);
 char *shell_elsewhere (const Buffer *bp);

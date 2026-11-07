@@ -752,8 +752,9 @@ tilde_to_code (long n)
 }
 
 /* The code for a mouse report of button code `cb' at 1-based column
-   `x', row `y'. Releases, drags and presses of buttons 2 and 3 are
-   only for programs reading the mouse; elsewhere they are ignored. */
+   `x', row `y'. Releases of buttons 2 and 3, and their drags and
+   presses, are only for programs reading the mouse; elsewhere they
+   are ignored. */
 static unsigned
 mouse_code (unsigned cb, unsigned long x, unsigned long y, bool release)
 {
@@ -783,7 +784,7 @@ mouse_code (unsigned cb, unsigned long x, unsigned long y, bool release)
 		mouse_to_shell = shell_mouse_at (mouse_y, mouse_x);
 		key = press[b];
 	}
-	if (key != KBD_MOUSE_1 && key != KBD_DRAG_MOUSE_1 && !mouse_to_shell)
+	if (key != KBD_MOUSE_1 && key != KBD_DRAG_MOUSE_1 && key != KBD_UP_MOUSE_1 && !mouse_to_shell)
 		return CODE_IGNORE;
 	return CODE_MOUSE + (key - KBD_MOUSE_1);
 }

@@ -74,6 +74,7 @@ struct VTerm {
 
 	ScrollLine *sb;		/* Scrollback ring. */
 	size_t sb_start, sb_len;
+	size_t scrolled;	/* Lines ever pushed to the scrollback. */
 
 	enum ParseState state;
 	char inter;
@@ -152,6 +153,7 @@ push_scrollback (VTerm *t, const VCell *line)
 	sl->len = len;
 	sl->cells = xmalloc ((len ? len : 1) * sizeof (VCell));
 	memcpy (sl->cells, line, len * sizeof (VCell));
+	t->scrolled++;
 }
 
 /* Scroll lines [top, bot] up by n. */
@@ -371,6 +373,12 @@ size_t
 vterm_scrollback_len (const VTerm *t)
 {
 	return t->sb_len;
+}
+
+size_t
+vterm_scrolled (const VTerm *t)
+{
+	return t->scrolled;
 }
 
 const VCell *

@@ -1700,13 +1700,20 @@ handle_event (const SDL_Event *ev)
 		break;
 	case SDL_MOUSEBUTTONUP: {
 		static const int buttons[] = { 0, SDL_BUTTON_LEFT, SDL_BUTTON_MIDDLE, SDL_BUTTON_RIGHT };
+		bool released = false;
 		if (shell_button != 0 && ev->button.button == buttons[shell_button]) {
 			pixel_to_cell (ev->button.x, ev->button.y, &mouse_y, &mouse_x);
 			queue_push (KBD_UP_MOUSE_1 + (Keystroke) shell_button - 1);
 			shell_button = 0;
+			released = true;
 		}
 		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
+			/* Ends a selection in a terminal. */
+			if (mouse_down && !released) {
+				pixel_to_cell (ev->button.x, ev->button.y, &mouse_y, &mouse_x);
+				queue_push (KBD_UP_MOUSE_1);
+			}
 			mouse_down = false;
 			if (preview_drag) {
 				preview_drag = false;

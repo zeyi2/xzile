@@ -68,6 +68,10 @@ What the window adds to the terminal editor:
   (the `tooltip` face) naming the file, the place and what a click
   does. No links are shown while a program in the terminal reads the
   mouse.
+- Drag over a terminal in char mode to select text on its screen, in
+  the `region` face: the release copies it to the kill ring and the
+  clipboard, and `M-w` (⌘C) copies it again. This works in `xzile`
+  too, unless the program in the terminal reads the mouse.
 - Drag a status bar, or the border between side-by-side windows, to
   resize them.
 - Kills and yanks use the system clipboard; middle-click pastes.

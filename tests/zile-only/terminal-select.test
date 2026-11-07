@@ -1,0 +1,107 @@
+#!/bin/sh
+# Selecting text in a terminal buffer with the mouse
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. The editor runs on a
+# pseudo-terminal made by Python, which types the keys and sends the
+# mouse reports; without python3 the test is skipped. Prints why on
+# failure.
+
+set -u
+
+command -v python3 >/dev/null 2>&1 || exit 0
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-select.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+H=$work/home
+mkdir "$H"
+printf '(setq select-enable-clipboard nil)\n' > "$H/.xzile"
+
+fail () {
+	printf '%s\n' "$*"
+	exit 1
+}
+
+# Run `sh -c "printf 'hello world\nsecond line\n'; read x"' in a
+# terminal on a 24x80 screen, then send the mouse reports in argv[2],
+# given as `press|drag|release ROW COL' (from 0) separated by commas;
+# end the program, yank into out.txt, save it and quit.
+cat > "$work/drive.py" <<'PY'
+import fcntl, os, pty, select, struct, sys, termios, time
+editor, mouse = sys.argv[1:3]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(editor, [editor, 'out.txt'])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+
+def pump(secs):
+    """Read the editor's output for `secs'; False once it has exited."""
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return True
+        if select.select([fd], [], [], left)[0]:
+            try:
+                if not os.read(fd, 65536):
+                    return False
+            except OSError:
+                return False
+
+def keys(s, secs=0.3):
+    os.write(fd, s)
+    pump(secs)
+
+pump(1)
+keys(b'\x1bxterm\r\x01\x0b')
+keys(b'sh -c "printf \'hello world\\nsecond line\\n\'; read x"\r', 1)
+for report in mouse.split(','):
+    what, row, col = report.split()
+    cb, final = {'press': (0, 'M'), 'drag': (32, 'M'), 'release': (0, 'm')}[what]
+    keys(b'\x1b[<%d;%d;%d%s' % (cb, int(col) + 1, int(row) + 1, final.encode()), 0.2)
+keys(b'\r', 0.5)
+keys(b'\x18b\r\x19\x18\x13\x18\x03', 1)
+deadline = time.time() + 10
+while pump(0.5) and time.time() < deadline:
+    pass
+_, status = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+PY
+
+run () {
+	rm -f "$work/out.txt"
+	errors=$(cd "$work" && HOME=$H TERM=xterm python3 drive.py "$XZILE" "$1" 2>&1)
+	[ $? -eq 0 ] || fail "editor failed: $errors"
+}
+
+# 1. A drag selects from the cell pressed to the one it ends on, both
+# included, and the release copies the text, without the blanks at
+# the ends of its lines.
+run 'press 0 6,drag 1 3,drag 1 5,release 1 5'
+printf 'world\nsecond\n' | cmp -s - "$work/out.txt" || fail "step 1: out.txt is: $(cat "$work/out.txt")"
+
+# 2. A drag backwards selects the same, wherever it went on the way.
+run 'press 1 5,drag 0 90,drag 0 6,release 0 6'
+printf 'world\nsecond\n' | cmp -s - "$work/out.txt" || fail "step 2: out.txt is: $(cat "$work/out.txt")"
+
+# 3. A click selects nothing: the kill ring keeps the text killed in
+# the minibuffer before the program was typed.
+run 'press 0 3,release 0 3'
+grep -q '^/' "$work/out.txt" || fail "step 3: out.txt is: $(cat "$work/out.txt")"
+exit 0
