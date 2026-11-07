@@ -481,7 +481,8 @@ main (int argc, char **argv)
 
 	/* Run the main loop. */
 	for (;;) {
-		if (lastflag & FLAG_NEED_RESYNC)
+		/* Wrapped, point moves rows without leaving its line. */
+		if ((lastflag & FLAG_NEED_RESYNC) || window_wraps (cur_wp))
 			window_resync (cur_wp);
 		get_and_run_command ();
 	}

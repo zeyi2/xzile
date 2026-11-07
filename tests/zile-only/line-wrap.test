@@ -1,0 +1,178 @@
+#!/bin/sh
+# Long lines continue on the rows below, broken at spaces, and C-n,
+# C-p and the mouse go by those rows; with truncate-lines they are cut
+#
+# Copyright (c) 2026 Zeyi2 <zeyi2@nekoarch.cc>
+#
+# This file is part of XZile.
+#
+# XZile is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3, or (at your option)
+# any later version.
+#
+# XZile is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+# Run by run-tests.sh with XZILE set. The editor runs on a
+# pseudo-terminal made by Python, which reads what the editor draws
+# and types the keys; without python3 the test is skipped. Prints why
+# on failure.
+
+set -u
+
+command -v python3 >/dev/null 2>&1 || exit 0
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/xzile-wrap.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/home"
+# The text is 39 columns wide: 40 less the scroll bar.
+{
+	printf 'alpha beta gamma delta epsilon zeta eta theta iota\n'
+	printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n'
+	printf 'a\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\344\270\255\n'
+	printf 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n'
+	printf 'tab\there\n'
+	printf 'a bb ccc dddd eeeee ffffff ggggggg hhhhhhhh\n'
+} > "$work/s.txt"
+printf '(setq truncate-lines t)\n' > "$work/truncate.el"
+
+cat > "$work/drive.py" <<'PY'
+import fcntl, os, pty, re, select, struct, sys, termios, time, unicodedata
+
+ROWS, COLS = 14, 40
+cells = [[' '] * COLS for _ in range(ROWS)]
+attrs = [[()] * COLS for _ in range(ROWS)]
+y = x = 0
+attr = ()
+pending = ''
+
+def feed(text):
+    """Draw the editor's output: cursor moves, clears, SGR and text."""
+    global y, x, attr, pending
+    text = pending + text
+    pending = ''
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '\x1b':
+            m = re.compile(r'\x1b\[([?0-9;]*)([A-Za-z])').match(text, i)
+            if not m:
+                if len(text) - i < 16:
+                    pending = text[i:]
+                    return
+                i += 1
+                continue
+            p, f = m.group(1), m.group(2)
+            if f == 'H':
+                a = (p.split(';') + ['1', '1'])[:2] if p else ['1', '1']
+                y, x = int(a[0] or 1) - 1, int(a[1] or 1) - 1
+            elif f == 'J':
+                for r in range(ROWS):
+                    cells[r] = [' '] * COLS
+                    attrs[r] = [()] * COLS
+            elif f == 'm':
+                v = [n for n in p.split(';') if n] or ['0']
+                if v[0] == '0':
+                    attr, v = (), v[1:]
+                attr = attr + tuple(v)
+            i = m.end()
+            continue
+        i += 1
+        w = 0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in 'WF' else 1
+        if c >= ' ' and w > 0 and 0 <= y < ROWS and 0 <= x < COLS:
+            cells[y][x] = c
+            attrs[y][x] = attr
+            if w == 2 and x + 1 < COLS:
+                cells[y][x + 1] = ''
+        x += w
+
+editor, args = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(editor, [editor, '--no-init-file'] + args)
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))
+
+def pump(secs):
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return True
+        if select.select([fd], [], [], left)[0]:
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            feed(d.decode('utf-8', 'replace'))
+
+def keys(s):
+    os.write(fd, s.encode())
+    pump(0.4)
+
+def click(r, c):
+    os.write(fd, ('\x1b[<0;%d;%dM' % (c + 1, r + 1)).encode())
+    keys('\x1b[<0;%d;%dm' % (c + 1, r + 1))
+
+failed = []
+def text(r):
+    return ''.join(cells[r][:COLS - 1]).rstrip()
+
+def cursor(step, want):
+    if (y, x) != want:
+        failed.append('%s: the cursor is at %r, not %r' % (step, (y, x), want))
+
+pump(1.2)
+WIDE = '\u4e2d'
+if 'truncate.el' in args:
+    if text(0) != 'alpha beta gamma delta epsilon zeta et$' or text(1) != 'x' * 39:
+        failed.append('truncated: the rows are %r' % [text(r) for r in range(3)])
+else:
+    want = ['alpha beta gamma delta epsilon zeta eta',	# The space after is unseen.
+            'theta iota',
+            'x' * 39,				# No row after it.
+            'a' + WIDE * 19,			# No room for the 20th.
+            WIDE,
+            'y' * 39,
+            'y' * 6,
+            'tab     here',
+            'a bb ccc dddd eeeee ffffff ggggggg',	# Not inside the word.
+            'hhhhhhhh']
+    got = [text(r) for r in range(len(want))]
+    if got != want:
+        failed.append('wrapped: the rows are\n  %s\nnot\n  %s' % ('\n  '.join(map(repr, got)), '\n  '.join(map(repr, want))))
+    keys('\x05')
+    cursor('C-e', (1, 10))
+    keys('\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02')
+    cursor('C-b to the unseen space', (0, 38))
+    keys('\x01\x06\x06\x06\x0e')
+    cursor('C-n into the row continuing the line', (1, 3))
+    keys('\x0e\x05')
+    cursor('C-e on a line filling its row', (2, 38))
+    keys('\x01\x06\x06\x06\x0e')
+    cursor('C-n into a row of wide characters', (3, 3))
+    keys('\x0e')
+    cursor('C-n to a shorter last row', (4, 2))
+    keys('\x10\x10\x10')
+    cursor('C-p back to the column it kept', (1, 3))
+    click(6, 4)
+    keys('\x06')
+    cursor('a click on the row continuing a line', (6, 5))
+keys('\x18\x03')
+pump(2)
+print('\n'.join(failed))
+sys.exit(1 if failed else 0)
+PY
+
+for args in "s.txt" "s.txt --load truncate.el"; do
+	errors=$(cd "$work" && HOME=$work/home TERM=xterm-256color python3 drive.py "$XZILE" $args 2>&1)
+	[ $? -eq 0 ] || { printf '%s\n' "$errors"; exit 1; }
+done
+exit 0

@@ -18,6 +18,7 @@
    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 #include "xzile.h"
+#include "tui.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -372,6 +373,15 @@ call_command (LispFunc *f, long uniarg, Args *args)
 	return ok;
 }
 
+/* A command a click on the screen asks for, to run as if by a key. */
+static const char *mouse_command;
+
+void
+run_command_after_click (const char *name)
+{
+	mouse_command = name;
+}
+
 void
 get_and_run_command (void)
 {
@@ -389,6 +399,18 @@ get_and_run_command (void)
 		return;
 	}
 
+	/* Mouse events on a control drawn by the toolkit, such as a scroll
+	   bar, go to it. */
+	LispFunc *f = NULL;
+	mouse_command = NULL;
+	if (keys.n == 1 && KBD_IS_MOUSE (keys.v[0]) && tui_dispatch_mouse (keys.v[0])) {
+		if (mouse_command == NULL || (f = lisp_func_find (mouse_command)) == NULL) {
+			kv_free (&keys);
+			return;
+		}
+		goto run;
+	}
+
 	/* Mouse events for a terminal program go straight to it; others
 	   that have no command, such as releases, are ignored. */
 	if (keys.n == 1 && KBD_IS_MOUSE (keys.v[0]) && shell_mouse (keys.v[0])) {
@@ -396,12 +418,13 @@ get_and_run_command (void)
 		return;
 	}
 
-	LispFunc *f = get_function_by_keys (&keys);
+	f = get_function_by_keys (&keys);
 	if (f == NULL && keys.n == 1 && KBD_IS_MOUSE (keys.v[0])) {
 		kv_free (&keys);
 		return;
 	}
 
+run:
 	minibuf_clear ();
 	if (f != NULL) {
 		winhist_before_command ();

@@ -110,6 +110,17 @@ static const char *const builtin_faces[] = {
 	FACE_LINK,
 	FACE_LINK_HOVER,
 	FACE_TOOLTIP,
+	FACE_MODE_LINE_HIGHLIGHT,
+	FACE_TUI_PANEL,
+	FACE_TUI_BORDER,
+	FACE_TUI_TITLE,
+	FACE_TUI_MUTED,
+	FACE_TUI_KEY,
+	FACE_TUI_HOVER,
+	FACE_TUI_SCROLLBAR_TRACK,
+	FACE_TUI_SCROLLBAR_THUMB,
+	FACE_TUI_SCROLLBAR_THUMB_HOVER,
+	FACE_TUI_DIVIDER_HOVER,
 	FACE_MARKDOWN_HEADER_1,
 	FACE_MARKDOWN_HEADER_2,
 	FACE_MARKDOWN_HEADER_3,
@@ -651,6 +662,34 @@ set_markdown_faces (Theme *t, const MarkdownColors *c)
 	set_face_slant (t, FACE_MARKDOWN_TASK_DONE, U, T);
 }
 
+/* The colours of a theme's toolkit faces (see tui.c): the panel
+   background, borders, titles, muted text and key names; the
+   background of a hovered row; the scroll bar track (a background) and
+   thumb, normal and hovered; a hovered window divider; and the
+   background of a hovered part of the mode line. NULL leaves a colour
+   out; the light and dark themes of few colours underline instead. */
+typedef struct {
+	const char *panel, *border, *title, *muted, *key, *hover;
+	const char *track, *thumb, *thumb_hover, *divider_hover, *mode_line_highlight;
+} TuiColors;
+
+static void
+set_tui_faces (Theme *t, const TuiColors *c)
+{
+	set_builtin_face (t, FACE_TUI_PANEL, NULL, c->panel, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_BORDER, c->border, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_TITLE, c->title, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_TUI_MUTED, c->muted, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_KEY, c->key, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_TUI_HOVER, NULL, c->hover, NULL, U, c->hover == NULL ? T : U, U);
+	set_builtin_face (t, FACE_TUI_SCROLLBAR_TRACK, c->muted, c->track, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_SCROLLBAR_THUMB, c->thumb, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_SCROLLBAR_THUMB_HOVER, c->thumb_hover, NULL, NULL, U, U, U);
+	set_builtin_face (t, FACE_TUI_DIVIDER_HOVER, c->divider_hover, NULL, NULL, T, U, U);
+	set_builtin_face (t, FACE_MODE_LINE_HIGHLIGHT, NULL, c->mode_line_highlight, NULL, U,
+			  c->mode_line_highlight == NULL ? T : U, U);
+}
+
 static void
 define_default_dark_theme (void)
 {
@@ -699,6 +738,8 @@ define_default_dark_theme (void)
 	set_builtin_face (t, FACE_LINK, "cyan", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "brightblack", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "brightwhite", "brightblack", NULL, U, U, U);
+	set_tui_faces (t, &(TuiColors) { NULL, "brightblack", "brightwhite", "brightblack", "cyan", NULL,
+		NULL, "brightblack", "white", "cyan", NULL });
 	set_markdown_faces (t, &(MarkdownColors) {
 		{ "cyan", "magenta", "yellow", "green" }, "green", NULL, NULL, "cyan", "brightblack",
 		"brightblack", "yellow" });
@@ -752,6 +793,8 @@ define_default_light_theme (void)
 	set_builtin_face (t, FACE_LINK, "blue", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "cyan", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "black", "yellow", NULL, U, U, U);
+	set_tui_faces (t, &(TuiColors) { NULL, "blue", "black", "blue", "blue", NULL,
+		NULL, "blue", "black", "blue", NULL });
 	set_markdown_faces (t, &(MarkdownColors) {
 		{ "blue", "magenta", "red", "green" }, "green", NULL, NULL, "blue", "brightblack",
 		"brightblack", "red" });
@@ -805,6 +848,8 @@ define_terminal_default_theme (void)
 	set_builtin_face (t, FACE_LINK, NULL, NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, NULL, NULL, U, T, T);
 	set_builtin_face (t, FACE_TOOLTIP, NULL, NULL, NULL, U, U, T);
+	set_tui_faces (t, &(TuiColors) { NULL, NULL, NULL, NULL, NULL, NULL,
+		NULL, NULL, NULL, NULL, NULL });
 	set_markdown_faces (t, &(MarkdownColors) { { NULL, NULL, NULL, NULL }, NULL, NULL, NULL,
 		NULL, NULL, NULL, NULL });
 }
@@ -860,6 +905,8 @@ define_xzile_dark_theme (void)
 	set_builtin_face (t, FACE_LINK, "#82aaff", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#2a3142", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "#e3e7ee", "#2b303b", NULL, U, U, U);
+	set_tui_faces (t, &(TuiColors) { "#1b1e24", "#3a4050", "#e3e7ee", "#6b7385", "#82aaff", "#232731",
+		"#202329", "#4a5163", "#7c8598", "#82aaff", "#363c4a" });
 	set_markdown_faces (t, &(MarkdownColors) {
 		{ "#82aaff", "#c099ff", "#65d1e6", "#ffc777" }, "#f5a97f", "#252933", "#1e2128",
 		"#82aaff", "#5f6779", "#9aa3b2", "#ff9e64" });
@@ -914,6 +961,8 @@ define_xzile_light_theme (void)
 	set_builtin_face (t, FACE_LINK, "#3b6fe0", NULL, NULL, U, T, U);
 	set_builtin_face (t, FACE_LINK_HOVER, NULL, "#e3e9f8", NULL, U, T, U);
 	set_builtin_face (t, FACE_TOOLTIP, "#2b2d33", "#eceef2", NULL, U, U, U);
+	set_tui_faces (t, &(TuiColors) { "#f4f5f8", "#d3d6dd", "#2b2d33", "#8f95a1", "#3b6fe0", "#eceef3",
+		"#eef0f3", "#c5c9d1", "#9097a3", "#3b6fe0", "#d9dde5" });
 	set_markdown_faces (t, &(MarkdownColors) {
 		{ "#3b6fe0", "#a626a4", "#0f7f8f", "#b86e00" }, "#c4570d", "#eceef2", "#f3f4f7",
 		"#3b6fe0", "#9da2ad", "#696c77", "#c4570d" });

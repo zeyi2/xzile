@@ -61,6 +61,7 @@ CORE_OBJS = \
 	src/compile.o \
 	src/completion.o \
 	src/debug.o \
+	src/display.o \
 	src/dired.o \
 	src/estr.o \
 	src/eval.o \
@@ -93,6 +94,7 @@ CORE_OBJS = \
 	src/syntax.o \
 	src/term_minibuf.o \
 	src/term_redisplay.o \
+	src/tui.o \
 	src/terminal.o \
 	src/theme.o \
 	src/undo.o \
@@ -141,6 +143,7 @@ HTML_PREVIEW_MACOS = HTML_PREVIEW_SRC=modes/html_preview_macos.m \
 
 ESTR_TEST_OBJS = src/estr-test.o src/estr.o src/util.o
 LAYOUT_TEST_OBJS = src/layout-test.o src/layout.o src/estr.o src/util.o
+TUI_TEST_OBJS = src/tui-test.o src/tui.o src/screen.o src/utf8.o src/util.o
 PREVIEW_TEST_OBJS = modes/preview-test.o modes/preview_view.o modes/image_probe.o src/util.o
 
 DOCS = AUTHORS FAQ NEWS README.md src/dotzile.sample
@@ -152,8 +155,9 @@ src/xzile: $(OBJS)
 
 GUI_RENDER_OBJS = modes/image_decode.o modes/pdf_render.o
 
-$(OBJS) src/gui.o $(GUI_MODE_OBJS) $(GUI_RENDER_OBJS) src/estr-test.o src/layout-test.o modes/preview-test.o: src/xzile.h
-src/screen.o src/term.o src/gui.o modes/gui_preview.o: src/screen.h
+$(OBJS) src/gui.o $(GUI_MODE_OBJS) $(GUI_RENDER_OBJS) src/estr-test.o src/layout-test.o src/tui-test.o modes/preview-test.o: src/xzile.h
+src/screen.o src/term.o src/gui.o src/tui.o modes/gui_preview.o: src/screen.h
+src/tui.o src/term_redisplay.o src/picker.o src/window.o src/bind.o src/term.o src/gui.o src/tui-test.o: src/tui.h
 modes/image.o modes/image_probe.o modes/pdf.o modes/preview.o modes/preview_view.o: modes/preview.h
 $(GUI_MODE_OBJS) $(GUI_RENDER_OBJS) modes/preview-test.o: modes/preview.h
 src/gui.o modes/gui_preview.o: modes/gui_preview.h
@@ -205,12 +209,16 @@ src/estr-test: $(ESTR_TEST_OBJS)
 src/layout-test: $(LAYOUT_TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(LAYOUT_TEST_OBJS) $(LIBS)
 
+src/tui-test: $(TUI_TEST_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(TUI_TEST_OBJS) $(LIBS)
+
 modes/preview-test: $(PREVIEW_TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(PREVIEW_TEST_OBJS) $(LIBS)
 
-check: src/xzile src/estr-test src/layout-test modes/preview-test
+check: src/xzile src/estr-test src/layout-test src/tui-test modes/preview-test
 	src/estr-test
 	src/layout-test
+	src/tui-test
 	modes/preview-test
 	XZILE=src/xzile sh tests/run-tests.sh
 
@@ -252,7 +260,7 @@ uninstall:
 	rm -rf $(DESTDIR)$(docdir)
 
 clean:
-	rm -f src/*.o src/xzile src/xzile-gui src/xzile-html-preview src/estr-test src/layout-test
+	rm -f src/*.o src/xzile src/xzile-gui src/xzile-html-preview src/estr-test src/layout-test src/tui-test
 	rm -f modes/*.o modes/preview-test
 	rm -f src/mkdotzile src/dotzile.sample
 	rm -rf XZile.app

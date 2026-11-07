@@ -193,12 +193,17 @@ update_leaf_geometry (WinNode *leaf, void *data)
 		wp->ewidth = wp->fwidth > 2 ? wp->fwidth - 2 : 1;
 	else
 		wp->ewidth = wp->fwidth;
+	/* The scroll bar is right of the text. */
+	wp->scroll_bar_width = wp->ewidth > layout_scroll_bar_width + 1 ? layout_scroll_bar_width : 0;
+	wp->ewidth -= wp->scroll_bar_width;
 
 	wp->eheight = wp->fheight > 0 ? wp->fheight - 1 : 0;
 
 	if (gd->too_small == NULL && too_small (wp->fwidth, wp->fheight))
 		gd->too_small = wp;
 }
+
+size_t layout_scroll_bar_width = 0;
 
 Window *
 update_windows_geometry (size_t x, size_t y, size_t w, size_t h)

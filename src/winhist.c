@@ -202,11 +202,7 @@ show_place (Window *wp, Buffer *bp, size_t o, size_t topdelta)
 	o = MIN (o, buffer_length (bp));
 	buffer_switch_to (bp, false);
 	buffer_goto_offset (bp, o);
-	size_t line = buffer_offset_to_line (bp, o);
-	if (topdelta == NOPOS)
-		topdelta = wp->eheight / 2;
-	wp->topdelta = MIN (MIN (topdelta, line), wp->eheight > 0 ? wp->eheight - 1 : 0);
-	wp->lastpointn = line;
+	window_set_top (wp, topdelta == NOPOS ? wp->eheight / 2 : topdelta);
 }
 
 /* Go one buffer back (dir < 0) or forward in the current window. */

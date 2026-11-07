@@ -864,9 +864,9 @@ buffer_kill (Buffer *bp)
 					wp->saved_pt = xzalloc (sizeof (Marker));
 					marker_move (wp->saved_pt, prev, o);
 				}
-				size_t line = buffer_offset_to_line (prev, o);
-				wp->topdelta = MIN (MIN (topdelta, line), wp->eheight > 0 ? wp->eheight - 1 : 0);
-				wp->lastpointn = line;
+				/* Placed once the current buffer is right. */
+				wp->topdelta = topdelta;
+				wp->lastpointn = NOPOS;
 			}
 		}
 
@@ -893,7 +893,9 @@ buffer_kill (Buffer *bp)
 
 	/* Resync windows that need it. */
 	for (Window *wp = head_wp; wp != NULL; wp = wp->next)
-		if (wp->bp == next_bp)
+		if (wp->lastpointn == NOPOS)
+			window_set_top (wp, wp->topdelta);
+		else if (wp->bp == next_bp)
 			window_resync (wp);
 }
 

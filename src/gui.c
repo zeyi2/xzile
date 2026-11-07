@@ -28,6 +28,7 @@
 
 #include "xzile.h"
 #include "screen.h"
+#include "tui.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1462,23 +1463,21 @@ pixel_to_cell (int wx, int wy, size_t *y, size_t *x)
 	*y = (size_t) MAX (0, MIN (cy, (long) scr_rows - 1));
 }
 
-/* Dragging the divider of a split to resize its windows. */
-static WinNode *drag_split;		/* NULL when not dragging. */
-static unsigned long drag_generation;	/* The layout's, when the drag began. */
-static size_t drag_start, drag_start_size;
-
-static SDL_Cursor *
-divider_cursor (const WinNode *split)
-{
-	return split == NULL ? cursor_ibeam : split->kind == SPLIT_ROWS ? cursor_rows : cursor_cols;
-}
-
-/* The mouse pointer for cell `y', `x'. */
+/* The mouse pointer for cell `y', `x': what the toolkit region under
+   it asks for, as a divider does, or else the I-beam. */
 static SDL_Cursor *
 pointer_at (size_t y, size_t x)
 {
-	WinNode *split = layout_divider_at (y, x);
-	return split == NULL && preview_at (y, x) ? cursor_arrow : divider_cursor (split);
+	switch (tui_cursor ()) {
+	case TUI_CURSOR_POINTER:
+		return cursor_hand;
+	case TUI_CURSOR_EW_RESIZE:
+		return cursor_cols;
+	case TUI_CURSOR_NS_RESIZE:
+		return cursor_rows;
+	default:
+		return preview_at (y, x) ? cursor_arrow : cursor_ibeam;
+	}
 }
 
 /* Dragging a preview to move it. */
@@ -1499,7 +1498,7 @@ static bool
 update_hover (void)
 {
 	ScreenLink l = { 0, 0, 0, NULL };
-	bool now = pointer_moved && focused && !mouse_down && shell_button == 0 && drag_split == NULL &&
+	bool now = pointer_moved && focused && !mouse_down && shell_button == 0 &&
 		!preview_drag && pointer_y + 1 < phys_rows && link_at (pointer_y, pointer_x, &l);
 	bool changed = now != hovering || (now && (l.y != hover.y || l.x0 != hover.x0 || l.x1 != hover.x1 ||
 						     strcmp (l.hint, hover.hint) != 0));
@@ -1572,58 +1571,6 @@ grid_pixels (int wx, int wy, double *px, double *py)
 	*py = (double) wy * scale - pad;
 }
 
-static bool
-drag_begin (size_t y, size_t x)
-{
-	WinNode *split = layout_divider_at (y, x);
-	if (split == NULL)
-		return false;
-	bool rows = split->kind == SPLIT_ROWS;
-	drag_split = split;
-	drag_generation = layout_generation ();
-	drag_start = rows ? y : x;
-	drag_start_size = rows ? split->left_or_top->height : split->left_or_top->width;
-	SDL_CaptureMouse (SDL_TRUE);
-	show_cursor (divider_cursor (split));
-	return true;
-}
-
-static void
-drag_end (void)
-{
-	if (drag_split == NULL)
-		return;
-	drag_split = NULL;
-	SDL_CaptureMouse (SDL_FALSE);
-	show_cursor (cursor_ibeam);
-}
-
-static void
-keep_point_visible (WinNode *leaf, void *data)
-{
-	(void) data;
-	Window *wp = leaf->wp;
-	if (wp->topdelta >= wp->eheight)
-		wp->topdelta = wp->eheight > 0 ? wp->eheight - 1 : 0;
-}
-
-static void
-drag_to (size_t y, size_t x)
-{
-	/* A command run during the drag may have freed the split. */
-	if (layout_generation () != drag_generation) {
-		drag_end ();
-		return;
-	}
-	long size = (long) drag_start_size - (long) drag_start +
-		(long) (drag_split->kind == SPLIT_ROWS ? y : x);
-	if (!layout_resize_split (drag_split, (size_t) MAX (size, 0)))
-		return;
-	update_windows_geometry (0, 0, term_width (), get_main_window_height ());
-	winnode_each_leaf (root_node, keep_point_visible, NULL);
-	redisplay_after_output ();
-}
-
 static void
 handle_event (const SDL_Event *ev)
 {
@@ -1669,8 +1616,6 @@ handle_event (const SDL_Event *ev)
 		if (ev->button.button == SDL_BUTTON_LEFT) {
 			size_t y, x;
 			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
-			if (drag_split != NULL || drag_begin (y, x))
-				break;
 			mouse_y = y;
 			mouse_x = x;
 			if (preview_at (y, x)) {
@@ -1719,7 +1664,6 @@ handle_event (const SDL_Event *ev)
 				preview_drag = false;
 				SDL_CaptureMouse (SDL_FALSE);
 			}
-			drag_end ();
 			pixel_to_cell (ev->button.x, ev->button.y, &y, &x);
 			show_cursor (pointer_at (y, x));
 		}
@@ -1728,13 +1672,6 @@ handle_event (const SDL_Event *ev)
 	case SDL_MOUSEMOTION: {
 		size_t y, x;
 		pixel_to_cell (ev->motion.x, ev->motion.y, &y, &x);
-		if (drag_split != NULL) {
-			if (ev->motion.state & SDL_BUTTON_LMASK)
-				drag_to (y, x);
-			else
-				drag_end ();
-			break;
-		}
 		if (preview_drag) {
 			if (!(ev->motion.state & SDL_BUTTON_LMASK)) {
 				preview_drag = false;
@@ -1749,6 +1686,9 @@ handle_event (const SDL_Event *ev)
 				redisplay_after_output ();
 			break;
 		}
+		/* What is under the pointer shows it can be clicked. */
+		if (ev->motion.state == 0 && get_variable_bool ("mouse-highlight") && tui_pointer_moved (true, y, x))
+			redisplay_after_output ();
 		if (ev->motion.state == 0 && (!pointer_moved || y != pointer_y || x != pointer_x))
 			point_at (true, y, x);
 		else if (ev->motion.state != 0 && pointer_moved)
@@ -1822,12 +1762,14 @@ handle_event (const SDL_Event *ev)
 			/* Input methods end or forget their composition then. */
 			composing = false;
 			if (!focused) {
-				drag_end ();
+				tui_pointer_moved (false, 0, 0);
 				point_at (false, 0, 0);
 			}
 			render ();
 			break;
 		case SDL_WINDOWEVENT_LEAVE:
+			if (tui_pointer_moved (false, 0, 0))
+				redisplay_after_output ();
 			point_at (false, 0, 0);
 			break;
 		case SDL_WINDOWEVENT_EXPOSED:

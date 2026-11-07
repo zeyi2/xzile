@@ -33,6 +33,7 @@
    allows, returns to ask for another location. */
 
 #include "xzile.h"
+#include "tui.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -69,6 +70,10 @@ struct Picker {
 	int selected;		/* Index in `matches', or -1. */
 	bool moved;		/* The user moved the selection. */
 	size_t top;		/* First row shown. */
+	bool follow;		/* Scroll to show the selection. */
+	long wheel;		/* Rows to scroll by, from the mouse wheel. */
+	int clicked;		/* Match chosen with the mouse, or -1. */
+	int cursor_y, cursor_x;	/* Where the input's cursor was drawn. */
 	int previewed;		/* Item last previewed, or -1. */
 
 	/* File mode. */
@@ -456,6 +461,7 @@ filter (Picker *p)
 	/* Preselect only strong matches, or the default. */
 	p->selected = -1;
 	p->top = 0;
+	p->follow = true;
 	p->moved = false;
 	if (p->nmatches == 0)
 		return;
@@ -572,11 +578,34 @@ file_choice (Picker *p, const PickerItem *it)
  * Display.
  *--------------------------------------------------------------------------*/
 
+/* The picker is a panel docked at the bottom: a rounded border
+   with the prompt and the count in its top edge and the keys in its
+   bottom edge, around the input, a blank line, and the candidates with
+   a scroll bar. A screen too short for that gets the input and the
+   candidates alone. */
+
+#define PICKER_KIND 0x50	/* For region keys. */
+
+static bool
+compact (void)
+{
+	return term_height () < 14;
+}
+
 static size_t
 rows_available (void)
 {
 	size_t h = term_height ();
-	return h > 6 ? MIN ((size_t) MAX_ROWS, h - 5) : 1;
+	if (compact ())
+		return h > 6 ? MIN ((size_t) MAX_ROWS, h - 5) : 1;
+	return MIN ((size_t) MAX_ROWS, h - 9);
+}
+
+/* The rows of the screen the picker takes, at the bottom. */
+static size_t
+panel_height (void)
+{
+	return rows_available () + (compact () ? 1 : 4);
 }
 
 typedef struct {
@@ -613,159 +642,237 @@ build_rows (Picker *p, Row *rows, size_t max)
 static size_t
 display_width (const char *s, size_t len)
 {
-	size_t w = 0;
-	for (size_t i = 0; i < len;) {
-		size_t cl;
-		uint32_t c = utf8_decode (s, len, i, &cl);
-		w += (size_t) utf8_char_display_width (c);
-		i += cl ? cl : 1;
-	}
-	return w;
+	return (size_t) tui_width (s, len);
 }
 
-/* Add `s', at most `width' columns, highlighting matched characters. */
+/* The input line: the prompt (when there is no border to show it), the
+   input scrolled to show the cursor, and a message or hint on the
+   right. */
 static void
-add_text (const char *s, const bool *pos, size_t width, const char *face)
+paint_input (TuiRect r, void *data)
 {
-	size_t len = strlen (s), col = 0;
-	for (size_t i = 0; i < len;) {
-		size_t cl;
-		uint32_t c = utf8_decode (s, len, i, &cl);
-		size_t w = (size_t) utf8_char_display_width (c);
-		if (col + w > width)
-			break;
-		term_apply_face (pos != NULL && pos[i] ? FACE_PICKER_MATCH : face);
-		term_addnstr (s + i, cl ? cl : 1);
-		col += w;
-		i += cl ? cl : 1;
+	Picker *p = data;
+	int x = r.x, end = r.x + r.w;
+	if (compact ()) {
+		char *count = xasprintf ("%zu/%zu ", p->nmatches, p->nitems);
+		x += tui_put (r.y, x, end - x, count, FACE_TUI_MUTED, 0);
+		x += tui_put (r.y, x, end - x, p->spec.prompt, FACE_MINIBUFFER_PROMPT, 0);
+		free (count);
+	} else {
+		x += tui_put (r.y, x, end - x, " ", NULL, 0);
+		x += tui_put (r.y, x, end - x, tui_unicode () ? "❯ " : "> ", FACE_TUI_KEY, 0);
 	}
-	term_apply_face (face);
-	for (; col < width; col++)
-		term_addch (' ');
+
+	/* What goes on the right, if it leaves room for the input. */
+	const char *message = p->list_error != NULL ? p->list_error : p->notice;
+	bool show_new = !p->spec.require_match && p->selected < 0 && p->input.len > 0 && !p->spec.file_mode;
+	const char *right = message != NULL ? message : show_new ? "RET uses the input" : NULL;
+	int rw = right != NULL ? tui_width (right, strlen (right)) + 2 : 0;
+	int avail = end - x - 1;
+	if (rw > 0 && avail - rw < (int) MAX (display_width (p->input.s, p->input.len), (size_t) 12) + 1)
+		rw = 0;
+	if (rw > 0) {
+		tui_put (r.y, end - rw, rw - 1, right, message != NULL ? FACE_ERROR : FACE_TUI_MUTED, 0);
+		avail -= rw;
+	}
+
+	/* Scroll the input to keep the cursor visible. */
+	avail = MAX (avail, 1);
+	size_t cursor_w = display_width (p->input.s, p->pos), start = 0;
+	while (cursor_w - display_width (p->input.s, start) >= (size_t) avail && start < p->pos)
+		start = utf8_next_char (p->input.s, p->input.len, start);
+	tui_put (r.y, x, avail, p->input.s + start, NULL, 0);
+	p->cursor_y = r.y;
+	p->cursor_x = x + (int) display_width (p->input.s + start, p->pos - start);
+}
+
+/* A candidate was clicked: select it, or choose it if it was selected
+   already or clicked twice. */
+static bool
+item_event (const TuiEvent *ev, void *data)
+{
+	Picker *p = data;
+	if (ev->kind == TUI_WHEEL) {
+		p->wheel += ev->wheel * 3;
+		return true;
+	}
+	if (ev->kind != TUI_PRESS)
+		return true;
+	if ((size_t) ev->a >= p->nmatches)
+		return true;
+	if (p->selected == (int) ev->a || ev->clicks >= 2)
+		p->clicked = (int) ev->a;
+	p->selected = (int) ev->a;
+	p->moved = true;
+	return true;
 }
 
 static void
-draw (Picker *p)
+scroll_to (double offset, void *data, long a, long b)
 {
+	(void) a;
+	(void) b;
+	Picker *p = data;
+	p->top = (size_t) (offset + 0.5);
+	p->follow = false;
+}
+
+/* The text of item `it', with the characters that `q' matched in
+   their face, in spans added to `spans'. */
+static size_t
+item_spans (const PickerItem *it, const Query *q, bool sel, TuiSpan *spans, char **bufs, size_t max)
+{
+	size_t len = strlen (it->text), n = 0;
+	bool *pos = xzalloc (len + 1);
+	if (q->nterms > 0)
+		score_item (it->text, q, pos);
+	for (size_t i = 0; i < len && n < max;) {
+		size_t j = i;
+		while (j < len && pos[j] == pos[i])
+			j++;
+		bufs[n] = xstrndup (it->text + i, j - i);
+		spans[n].text = bufs[n];
+		spans[n].face = pos[i] ? FACE_PICKER_MATCH : NULL;
+		spans[n].flags = sel ? TUI_BOLD : 0;
+		n++;
+		i = j;
+	}
+	free (pos);
+	return n;
+}
+
+static void
+draw (void *data)
+{
+	Picker *p = data;
 	size_t width = term_width (), height = term_height ();
 	size_t nrows = rows_available ();
-	size_t first_row = height - 1 - nrows;
+	size_t ph = panel_height ();
+	if (height <= ph)
+		return;
+	size_t first_row = height - ph;
+	bool small = compact ();
 
-	/* The prompt line. */
-	term_move (first_row, 0);
-	term_apply_face (FACE_DEFAULT);
-	char *count = xasprintf ("%zu/%zu ", p->nmatches, p->nitems);
-	term_apply_face (FACE_PICKER_ANNOTATION);
-	term_addstr (count);
-	term_apply_face (FACE_MINIBUFFER_PROMPT);
-	term_addstr (p->spec.prompt);
-	term_apply_face (FACE_DEFAULT);
-	size_t prompt_w = display_width (count, strlen (count)) + display_width (p->spec.prompt, strlen (p->spec.prompt));
-	free (count);
-	size_t avail = width > prompt_w + 1 ? width - prompt_w - 1 : 1;
-	/* Scroll the input to keep the cursor visible. */
-	size_t cursor_w = display_width (p->input.s, p->pos), start = 0;
-	while (cursor_w - display_width (p->input.s, start) >= avail && start < p->pos)
-		start = utf8_next_char (p->input.s, p->input.len, start);
-	add_text (p->input.s + start, NULL, avail, FACE_DEFAULT);
-	bool show_new = !p->spec.require_match && p->selected < 0 && p->input.len > 0 && !p->spec.file_mode;
-	const char *message = p->list_error != NULL ? p->list_error : p->notice;
-	if (message != NULL) {
-		char *hint = xasprintf ("  [%s]", message);
-		size_t used = prompt_w + display_width (p->input.s + start, p->input.len - start);
-		size_t room = width > used + 2 ? width - used - 2 : 0;
-		room = MAX (room, MIN (width / 2, (size_t) 40));
-		size_t hw = MIN (display_width (hint, strlen (hint)), room);
-		if (width > hw + 1) {
-			term_move (first_row, width - hw - 1);
-			add_text (hint, NULL, hw, FACE_ERROR);
-		}
-		free (hint);
-	} else if (show_new || p->spec.hints != NULL) {
-		const char *hint = "  [RET: use input]";
-		if (!show_new) {
-			/* The longest that does not hide the input, if any. */
-			size_t used = prompt_w + display_width (p->input.s + start, p->input.len - start) + 1;
-			size_t k = 0;
-			while (p->spec.hints[k] != NULL && used + strlen (p->spec.hints[k]) + 1 > width)
-				k++;
-			hint = p->spec.hints[k] != NULL ? p->spec.hints[k] : "";
-		}
-		size_t hw = strlen (hint);
-		if (hw > 0 && width > hw) {
-			term_move (first_row, width - hw - 1);
-			term_apply_face (FACE_PICKER_ANNOTATION);
-			term_addstr (hint);
-		}
-	}
-	size_t cursor_x = prompt_w + display_width (p->input.s + start, p->pos - start);
-
-	/* The candidates. */
+	/* Which rows show, keeping the selection in view when it moves. */
 	Row *rows = xmalloc ((p->nmatches * 2 + 1) * sizeof (Row));
 	size_t total = build_rows (p, rows, p->nmatches * 2 + 1);
-	size_t sel_row = 0;
-	for (size_t i = 0; i < total; i++)
-		if (!rows[i].header && (int) rows[i].match == p->selected)
-			sel_row = i;
-	if (p->selected >= 0) {
+	if (p->wheel != 0) {
+		long t = (long) p->top + p->wheel;
+		p->top = (size_t) MAX (t, 0);
+		p->wheel = 0;
+		p->follow = false;
+	}
+	if (p->selected >= 0 && p->follow) {
+		size_t sel_row = 0;
+		for (size_t i = 0; i < total; i++)
+			if (!rows[i].header && (int) rows[i].match == p->selected)
+				sel_row = i;
 		if (sel_row < p->top)
 			p->top = sel_row > 0 && rows[sel_row - 1].header ? sel_row - 1 : sel_row;
 		if (sel_row >= p->top + nrows)
 			p->top = sel_row - nrows + 1;
 	}
-	if (p->top > total)
-		p->top = 0;
+	p->top = total > nrows ? MIN (p->top, total - nrows) : 0;
 
+	/* Names line up, in up to 3/5 of the width. */
 	size_t text_w = 0;
 	for (size_t r = p->top; r < total && r < p->top + nrows; r++)
-		if (!rows[r].header)
-			text_w = MAX (text_w, display_width (p->items[p->matches[rows[r].match]].text,
-							      strlen (p->items[p->matches[rows[r].match]].text)));
+		if (!rows[r].header) {
+			const char *t = p->items[p->matches[rows[r].match]].text;
+			text_w = MAX (text_w, display_width (t, strlen (t)));
+		}
 	text_w = MIN (text_w + 2, width * 3 / 5);
 
 	Query q;
 	parse_query (query_text (p), &q);
-	for (size_t r = 0; r < nrows; r++) {
-		term_move (first_row + 1 + r, 0);
-		size_t ri = p->top + r;
-		if (ri >= total) {
-			term_apply_face (FACE_DEFAULT);
-			for (size_t x = 0; x < width; x++)
-				term_addch (' ');
+	TuiNode *list = tui_column (NULL);
+	char *bufs[64 * MAX_ROWS];
+	size_t nbufs = 0;
+	for (size_t r = p->top; r < total && r < p->top + nrows; r++) {
+		if (rows[r].header) {
+			TuiNode *h = tui_text (p->spec.groups[rows[r].group], FACE_PICKER_GROUP);
+			tui_add (list, tui_padding (0, 0, 0, small ? 1 : 3, h));
 			continue;
 		}
-		if (rows[ri].header) {
-			const char *title = p->spec.groups[rows[ri].group];
-			add_text (title, NULL, width, FACE_PICKER_GROUP);
-			continue;
-		}
-		size_t idx = p->matches[rows[ri].match];
+		size_t idx = p->matches[rows[r].match];
 		const PickerItem *it = &p->items[idx];
-		bool sel = (int) rows[ri].match == p->selected;
-		const char *face = sel ? FACE_PICKER_SELECTION : FACE_DEFAULT;
-		size_t len = strlen (it->text);
-		bool *pos = xzalloc (len + 1);
-		if (q.nterms > 0)
-			score_item (it->text, &q, pos);
-		term_apply_face (face);
-		term_addch (sel ? '>' : ' ');
-		add_text (it->text, pos, text_w, face);
-		free (pos);
-		size_t rest = width > text_w + 1 ? width - text_w - 1 : 0;
-		add_text (it->annotation != NULL ? it->annotation : "", NULL, rest,
-			  sel ? FACE_PICKER_SELECTION : FACE_PICKER_ANNOTATION);
+		bool sel = (int) rows[r].match == p->selected;
+		TuiKey key = TUI_KEY (PICKER_KIND, rows[r].match + 1);
+		TuiSpan spans[64];
+		size_t n = item_spans (it, &q, sel, spans, bufs + nbufs, 64);
+		nbufs += n;
+		TuiNode *mark = tui_text (sel ? (tui_unicode () ? "▌ " : "> ") : "  ", FACE_TUI_KEY);
+		TuiNode *row = tui_row (tui_text (small ? "" : " ", NULL), mark,
+					tui_sized ((int) text_w, 1, tui_spans (spans, n)),
+					tui_expanded (1, tui_text (it->annotation != NULL ? it->annotation : "",
+								   FACE_PICKER_ANNOTATION)),
+					NULL);
+		const char *bg = sel ? FACE_PICKER_SELECTION : tui_hovered (key) ? FACE_TUI_HOVER : NULL;
+		TuiRegionSpec spec = { key, item_event, p, 0, (long) rows[r].match, 0, TUI_CURSOR_POINTER, true };
+		tui_add (list, tui_clickable (&spec, bg != NULL ? tui_fill (bg, row) : row));
 	}
+	if (total == 0) {
+		bool loading = p->thread_started && !async_finished (p);
+		const char *what = loading ? " Loading..." : p->nitems == 0 ? " Nothing to choose from" : " No matches";
+		TuiNode *empty = loading ? tui_row (tui_text (small ? "" : "  ", NULL), tui_spinner (FACE_TUI_KEY),
+						      tui_text (what, FACE_TUI_MUTED), NULL)
+			: tui_padding (0, 0, 0, small ? 1 : 3, tui_text (what + 1, FACE_TUI_MUTED));
+		tui_add (list, empty);
+	}
+
+	/* Wheel events over empty rows scroll as well. */
+	TuiRegionSpec wheel_spec = { TUI_KEY (PICKER_KIND, 0), item_event, p, 0, (long) SIZE_MAX / 2, 0,
+				     TUI_CURSOR_DEFAULT, true };
+	TuiScroll s = { (double) total, (double) nrows, (double) p->top };
+	TuiNode *body = tui_row (tui_expanded (1, tui_clickable (&wheel_spec, list)),
+				 tui_scrollbar (&s, TUI_KEY (PICKER_KIND + 1, 0), scroll_to, p, 0, 0), NULL);
+	TuiNode *content = tui_column (tui_sized (-1, 1, tui_custom (-1, 1, paint_input, p)),
+				       small ? NULL : tui_sized (-1, 1, NULL), NULL);
+	tui_add (content, tui_expanded (1, body));
+
+	/* The keys there are, in the bottom border. */
+	TuiHint hints[8];
+	size_t nh = 0;
+	hints[nh++] = (TuiHint) { "RET", p->spec.file_mode ? "open" : "choose", KBD_RET };
+	if (p->spec.file_mode || !p->spec.require_match)
+		hints[nh++] = (TuiHint) { "TAB", "complete", KBD_TAB };
+	if (p->spec.other_window)
+		hints[nh++] = (TuiHint) { "C-o", "other window", KBD_CTRL | 'o' };
+	if (p->spec.kill != NULL)
+		hints[nh++] = (TuiHint) { "C-k", "remove", KBD_CTRL | 'k' };
+	if (p->spec.locations)
+		hints[nh++] = (TuiHint) { "M-l", "location", KBD_META | 'l' };
+	else if (p->spec.back_key)
+		hints[nh++] = (TuiHint) { "M-l", "back", KBD_META | 'l' };
+	if (!p->spec.require_match && !p->spec.file_mode)
+		hints[nh++] = (TuiHint) { "C-j", "use input", KBD_CTRL | 'j' };
+	hints[nh++] = (TuiHint) { "C-g", "cancel", KBD_CANCEL };
+
+	/* The prompt, as a title. */
+	char *title = xstrdup (p->spec.prompt);
+	size_t tl = strlen (title);
+	while (tl > 0 && (title[tl - 1] == ' ' || title[tl - 1] == ':'))
+		title[--tl] = '\0';
+	char *badge = xasprintf ("%s%zu / %zu", p->thread_started && !async_finished (p) ? "… " : "",
+				 p->nmatches, p->nitems);
+	TuiPanel panel = { small ? TUI_BORDER_NONE : TUI_BORDER_ROUNDED, FACE_TUI_PANEL, NULL, title, badge,
+			   hints, nh, 0, 0 };
+	tui_render (tui_panel (&panel, content), (TuiRect) { 0, (int) first_row, (int) width, (int) ph });
+	free (title);
+	free (badge);
+	for (size_t i = 0; i < nbufs; i++)
+		free (bufs[i]);
 	free (rows);
-	term_attrset (FONT_NORMAL);
+
 	term_set_cursor_visible (true);
-	term_move (first_row, MIN (cursor_x, width - 1));
+	term_move ((size_t) p->cursor_y, (size_t) MIN ((size_t) MAX (p->cursor_x, 0), width - 1));
 }
 
 static void
 redraw_all (Picker *p)
 {
+	(void) p;
 	term_redisplay ();
-	draw (p);
 	term_refresh ();
 }
 
@@ -818,6 +925,7 @@ move_selection (Picker *p, long delta)
 	s = MAX (0, MIN (s, (long) p->nmatches - 1));
 	p->selected = (int) s;
 	p->moved = true;
+	p->follow = true;
 }
 
 /* Remove item `idx' from the candidates. */
@@ -847,8 +955,10 @@ picker_run (Picker *p, PickerChoice *choice)
 	if (p->spec.history != NULL)
 		history_prepare (p->spec.history);
 
-	minibuf_set_reserved_height (rows_available () + 1);
+	minibuf_set_reserved_height (panel_height ());
 	term_minibuf_enter ();
+	tui_overlay_push (draw, p);
+	p->clicked = -1;
 
 	Utf8Pending utf8 = { { 0 }, 0, 0 };
 	bool dirty = true;
@@ -878,6 +988,14 @@ picker_run (Picker *p, PickerChoice *choice)
 		}
 		if (merge_pending (p))
 			dirty = true;
+		if (KBD_IS_MOUSE (key)) {
+			/* A click on a candidate selects it; one on the selection
+			   or a double click chooses it, as RET would. */
+			p->clicked = -1;
+			if (!tui_dispatch_mouse (key) || p->clicked < 0 || p->clicked != p->selected)
+				continue;
+			key = KBD_RET;
+		}
 		free (p->notice);
 		p->notice = NULL;
 
@@ -1055,6 +1173,8 @@ picker_run (Picker *p, PickerChoice *choice)
 	}
 
 done:
+	tui_overlay_pop (draw, p);
+	tui_forget (p);
 	if (choice->kind != PICK_CANCEL && choice->input == NULL)
 		choice->input = xstrdup (p->input.s);
 	if (choice->kind == PICK_ITEM && p->spec.history != NULL)

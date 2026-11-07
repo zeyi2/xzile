@@ -20,6 +20,7 @@
 
 #include "xzile.h"
 #include "screen.h"
+#include "tui.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -82,10 +83,11 @@ enum {
 static const char BRACKETED_PASTE_ENABLE[] = "\033[?2004h";
 static const char BRACKETED_PASTE_DISABLE[] = "\033[?2004l";
 static const char BRACKETED_PASTE_END[] = "\033[201~";
-/* Button and drag reports, in the SGR encoding. Most terminals still
-   select text with Shift (Option in some macOS terminals) held. */
-static const char MOUSE_ENABLE[] = "\033[?1002h\033[?1006h";
-static const char MOUSE_DISABLE[] = "\033[?1002l\033[?1006l";
+/* Button, drag and motion reports, in the SGR encoding. Most terminals
+   still select text with Shift (Option in some macOS terminals) held.
+   Motion with no button down highlights what is under the pointer. */
+static const char MOUSE_ENABLE[] = "\033[?1002h\033[?1003h\033[?1006h";
+static const char MOUSE_DISABLE[] = "\033[?1002l\033[?1003l\033[?1006l";
 
 
 /*--------------------------------------------------------------------------
@@ -170,9 +172,28 @@ enter_screen_mode (void)
 	out_str (MOUSE_ENABLE);
 }
 
+/* The pointer shape asked for with OSC 22, or NULL if none was. */
+static const char *pointer_shape;
+
+static void
+set_pointer_shape (enum TuiCursor cursor)
+{
+	static const char *const names[] = { "default", "pointer", "ew-resize", "ns-resize" };
+	const char *name = names[cursor];
+	if (pointer_shape == name || (pointer_shape == NULL && cursor == TUI_CURSOR_DEFAULT))
+		return;
+	pointer_shape = name;
+	char buf[64];
+	snprintf (buf, sizeof buf, "\033]22;%s\033\\", name);
+	out_str (buf);
+}
+
 static void
 leave_screen_mode (void)
 {
+	if (pointer_shape != NULL)
+		set_pointer_shape (TUI_CURSOR_DEFAULT);
+	pointer_shape = NULL;
 	out_str ("\033[0m");
 	out_str (BRACKETED_PASTE_DISABLE);
 	out_str (MOUSE_DISABLE);
@@ -331,6 +352,8 @@ detect_capabilities (void)
 	capabilities.has_colors = true;
 	capabilities.supports_default_colors = true;
 	truecolor = colorterm != NULL && (strcmp (colorterm, "truecolor") == 0 || strcmp (colorterm, "24bit") == 0);
+	/* Then themes keep their exact colours. */
+	capabilities.truecolor = truecolor;
 	if (strstr (term, "256color") != NULL || strstr (term, "truecolor") != NULL ||
 	    strstr (term, "direct") != NULL || (colorterm != NULL && *colorterm != '\0'))
 		capabilities.color_count = 256;
@@ -774,8 +797,14 @@ mouse_code (unsigned cb, unsigned long x, unsigned long y, bool release)
 	unsigned b = cb & 3;
 	Keystroke key;
 	if (release || b == 3) {	/* The X10 encoding releases button 3. */
-		if (!release && (cb & 32))
-			return CODE_IGNORE;	/* Motion with no button. */
+		if (!release && (cb & 32)) {
+			/* Motion with no button: highlight what is under it. */
+			if (get_variable_bool ("mouse-highlight") && tui_pointer_moved (true, mouse_y, mouse_x)) {
+				set_pointer_shape (tui_cursor ());
+				redisplay_after_output ();
+			}
+			return CODE_IGNORE;
+		}
 		key = up[release && b < 3 ? b : (unsigned) mouse_button];
 	} else if (cb & 32)
 		key = drag[b];

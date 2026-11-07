@@ -184,12 +184,6 @@ enum { L_LOCAL, L_RECENT, L_SAVED, L_CONFIG, L_NEW };
 static const char *const location_groups[] = { "This machine", "Recent connections", "Saved connections",
 						"SSH configuration", "Other", NULL };
 
-/* Longest first: the picker shows the longest that fits. */
-static const char *const location_hints[] = { "  [C-n/C-p: move  RET: choose  M-l/C-g: back]",
-					      "  [RET: choose  M-l/C-g: back]", "  [M-l/C-g: back]", "  [M-l/C-g]", NULL };
-static const char *const file_hints[] = { "  [M-l: location  TAB: complete  C-n/C-p: move  C-g: cancel]",
-					  "  [M-l: location  TAB: complete  C-g: cancel]",
-					  "  [M-l: location  C-g: cancel]", "  [M-l: location]", "  [M-l]", NULL };
 
 #define NEW_CONNECTION "New SSH connection..."
 
@@ -304,7 +298,6 @@ choose_location (Remote *cur, Remote **out)
 		spec.fuzzy_groups = 1u << L_RECENT | 1u << L_SAVED | 1u << L_CONFIG;
 		spec.default_item = def;
 		spec.notice = notice;
-		spec.hints = location_hints;
 		spec.back_key = true;
 		Picker *p = picker_new (&spec);
 		for (size_t i = 0; i < texts.n; i++)
@@ -435,7 +428,6 @@ picker_read_location_file (const char *prompt, Remote **loc, const char *initial
 		spec.default_item = -1;
 		spec.history = cur == NULL ? hp : NULL;
 		spec.locations = true;
-		spec.hints = file_hints;
 		spec.remote = cur;
 		spec.notice = notice;
 		Picker *p = picker_new (&spec);
@@ -532,7 +524,7 @@ add_buffers (Picker *p, Buffer *first, Buffer *last)
 
 typedef struct {
 	Buffer *orig;
-	size_t orig_topdelta, orig_lastpointn;
+	size_t orig_topdelta, orig_lastpointn, orig_lastpointrow;
 	char *project_dir;	/* Where to look for a Git project. */
 	char *project_root;	/* Found by the asynchronous source. */
 	Map *known;		/* Absolute paths of buffers and recent files. */
@@ -607,6 +599,7 @@ restore_window (SwitchState *st)
 		buffer_switch_to (st->orig, false);
 		cur_wp->topdelta = st->orig_topdelta;
 		cur_wp->lastpointn = st->orig_lastpointn;
+		cur_wp->lastpointrow = st->orig_lastpointrow;
 	}
 }
 
@@ -702,6 +695,7 @@ pick_buffer_to_switch (void)
 	st.orig = cur_bp;
 	st.orig_topdelta = cur_wp->topdelta;
 	st.orig_lastpointn = cur_wp->lastpointn;
+	st.orig_lastpointrow = cur_wp->lastpointrow;
 	st.project_dir = xstrdup (cur_bp->dir);
 	st.known = map_new ();
 

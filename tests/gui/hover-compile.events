@@ -29,23 +29,24 @@ up f ctrl
 down f ctrl
 up f ctrl
 sleep 200
-# *compilation* is from row 17, its output from row 21.
-sample rest 21 5
-move 21 5
+# *compilation* is from row 17, its output from row 22: the command
+# shown above it takes two rows.
+sample rest 22 5
+move 22 5
 sleep 200
 cursor hand
-sample hovered 21 5
+sample hovered 22 5
 differ rest hovered
-move 22 1
+move 23 1
 sleep 200
 cursor ibeam
-sample left 21 5
+sample left 22 5
 same rest left
-move 22 3
-sleep 200
 move 23 3
 sleep 200
-move 21 20
+move 24 3
+sleep 200
+move 22 20
 sleep 200
 cursor hand
 # A key ends the hover, though the pointer stays over the link.
@@ -53,8 +54,8 @@ down w ctrl
 up w ctrl
 sleep 300
 cursor ibeam
-sample typed 21 5
+sample typed 22 5
 same rest typed
-click 22 10
+click 23 10
 sleep 300
 text A

@@ -1179,8 +1179,74 @@ note_shown (Markdown *md, unsigned long win, size_t lo, size_t hi)
 	md->shown[i].hi = hi;
 }
 
+/* Whether the line at `lo' shows rendered in `wp', as last drawn (or as
+   it would be drawn, if not yet). */
+static bool
+shown_rendered (Window *wp, size_t lo)
+{
+	Buffer *bp = wp->bp;
+	if (!markdown_active (bp) || bp->markdown->source)
+		return false;
+	Markdown *md = bp->markdown;
+	size_t slo = NOPOS, shi = NOPOS;
+	for (size_t i = 0; i < md->nshown; i++)
+		if (md->shown[i].win == wp->id) {
+			slo = md->shown[i].lo;
+			shi = md->shown[i].hi;
+		}
+	if (slo == NOPOS) {
+		/* Not drawn yet: as it would be. */
+		Region r;
+		bool highlight = (wp == cur_wp || get_variable_bool ("highlight-nonselected-windows")) &&
+			bp->mark != NULL && bp->mark_active;
+		if (highlight)
+			r = region_new (window_o (wp), bp->mark->o);
+		source_lines (wp, highlight ? &r : NULL, &slo, &shi);
+	}
+	return lo < slo || lo > shi;
+}
+
+size_t
+markdown_line_rows (Window *wp, size_t lo, size_t width, DisplayRow **rows)
+{
+	if (!shown_rendered (wp, lo))
+		return 0;
+	Glyphs g;
+	layout (wp->bp, lo, width, &g);
+	width = MAX (width, 1);
+	size_t n = 0, cap = 4;
+	*rows = xmalloc (cap * sizeof (DisplayRow));
+	size_t start = 0, col = 0, brk = 0;
+	for (size_t k = 0; k < g.n; k++) {
+		const Glyph *gl = &g.v[k];
+		bool space = gl->len == 1 && gl->text[0] == ' ';
+		if (col + gl->width > start + width && col > start) {
+			if (n + 1 >= cap)
+				*rows = xrealloc (*rows, (cap *= 2) * sizeof (DisplayRow));
+			/* A space that does not fit ends the row, unseen; else
+			   the row ends after its last space. */
+			size_t end = space ? col + gl->width : brk > start ? brk : col;
+			(*rows)[n++] = (DisplayRow) { start, end, start };
+			start = end;
+			if (!space && end == brk) {
+				k--;
+				continue;
+			}
+		}
+		col += gl->width;
+		if (space)
+			brk = col;
+	}
+	if (n + 1 >= cap)
+		*rows = xrealloc (*rows, (cap + 1) * sizeof (DisplayRow));
+	(*rows)[n++] = (DisplayRow) { start, MAX (col, start), start };
+	free (g.v);
+	return n;
+}
+
 bool
-markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, const Region *r)
+markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, size_t endcol, const Region *r,
+		    bool truncate)
 {
 	Buffer *bp = wp->bp;
 	if (!markdown_active (bp) || bp->markdown->source)
@@ -1192,9 +1258,11 @@ markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, const 
 		return false;
 
 	Glyphs g;
-	layout (bp, lo, width + startcol, &g);
+	/* Wrapped, `startcol' is where the row starts in a layout to the
+	   width; truncated, it is how far the window scrolled sideways. */
+	layout (bp, lo, truncate ? width + startcol : width, &g);
 	size_t total = g.cols > startcol ? g.cols - startcol : 0;
-	bool truncated = total > width;
+	bool truncated = truncate && total > width;
 	size_t limit = truncated && width > 0 ? width - 1 : width;
 	size_t col = 0, x = 0;
 	unsigned cur = UINT_MAX;
@@ -1218,7 +1286,7 @@ markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, const 
 			col += w;
 			continue;
 		}
-		if (x + w > limit)
+		if (x + w > limit || (!truncate && col + w > endcol))
 			break;
 		term_addnstr (gl->text, gl->len);
 		x += w;
@@ -1237,30 +1305,12 @@ bool
 markdown_cell_offset (Window *wp, size_t lo, size_t col, size_t *o, bool *on_text)
 {
 	Buffer *bp = wp->bp;
-	if (!markdown_active (bp) || bp->markdown->source)
-		return false;
-	Markdown *md = bp->markdown;
-	size_t slo = NOPOS, shi = NOPOS;
-	for (size_t i = 0; i < md->nshown; i++)
-		if (md->shown[i].win == wp->id) {
-			slo = md->shown[i].lo;
-			shi = md->shown[i].hi;
-		}
-	if (slo == NOPOS) {
-		/* Not drawn yet: as it would be. */
-		Region r;
-		bool highlight = (wp == cur_wp || get_variable_bool ("highlight-nonselected-windows")) &&
-			bp->mark != NULL && bp->mark_active;
-		if (highlight)
-			r = region_new (window_o (wp), bp->mark->o);
-		source_lines (wp, highlight ? &r : NULL, &slo, &shi);
-	}
-	if (lo >= slo && lo <= shi)
+	if (!shown_rendered (wp, lo))
 		return false;
 
-	size_t text_w = wp->gutter_width < wp->ewidth ? wp->ewidth - wp->gutter_width : 0;
+	size_t text_w = window_text_width (wp);
 	Glyphs g;
-	layout (bp, lo, text_w + wp->start_column, &g);
+	layout (bp, lo, window_wraps (wp) ? text_w : text_w + wp->start_column, &g);
 	size_t c = 0;
 	*o = buffer_end_of_line (bp, lo);
 	*on_text = false;

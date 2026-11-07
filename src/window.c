@@ -55,33 +55,9 @@ window_o (const Window *wp)
 }
 
 bool
-window_top_visible (Window *wp)
-{
-	return buffer_offset_to_line (wp->bp, window_o (wp)) == wp->topdelta;
-}
-
-bool
 window_bottom_visible (const Window *wp)
 {
 	return wp->all_displayed;
-}
-
-void
-window_resync (Window *wp)
-{
-	size_t n = buffer_offset_to_line (wp->bp, buffer_pt (wp->bp));
-	long delta = (long) (n - wp->lastpointn);
-
-	if (delta != 0) {
-		if ((delta > 0 && wp->topdelta + (size_t) delta < wp->eheight) ||
-		    (delta < 0 && wp->topdelta >= (size_t) (-delta)))
-			wp->topdelta += (size_t) delta;
-		else if (n > wp->eheight / 2)
-			wp->topdelta = wp->eheight / 2;
-		else
-			wp->topdelta = n;
-	}
-	wp->lastpointn = n;
 }
 
 /*
@@ -125,6 +101,7 @@ window_delete (Window *wp)
 
 	marker_free (wp->saved_pt);
 	winhist_free (wp);
+	free (wp->screen_rows);
 	free (wp);
 }
 
@@ -145,6 +122,7 @@ wm_split (Window *wp, enum SplitKind kind)
 	newwp->eheight = wp->eheight;
 	newwp->all_displayed = wp->all_displayed;
 	newwp->lastpointn = wp->lastpointn;
+	newwp->lastpointrow = wp->lastpointrow;
 	newwp->saved_pt = marker_point ();
 
 	/* Adjust wp. */
@@ -293,9 +271,7 @@ window_show_buffer (Window *wp, Buffer *bp, size_t o)
 	if (wp->saved_pt == NULL)
 		wp->saved_pt = xzalloc (sizeof (Marker));
 	marker_move (wp->saved_pt, bp, o);
-	size_t n = buffer_offset_to_line (bp, o);
-	wp->topdelta = MIN (n, wp->eheight / 2);
-	wp->lastpointn = n;
+	recenter (wp);
 }
 
 static bool
@@ -412,22 +388,6 @@ mouse_leaf (size_t *y, size_t *x)
 	return leaf;
 }
 
-/* The start of the line shown at row `y' of `wp', or NOPOS if there
-   is none; the top line is found as redisplay finds it. */
-static size_t
-line_at_row (Window *wp, size_t y)
-{
-	Buffer *bp = wp->bp;
-	size_t o = window_o (wp), line = buffer_offset_to_line (bp, o);
-	long n = (long) y - (long) MIN (wp->topdelta, line);
-	size_t l = buffer_start_of_line (bp, o);
-	for (; n < 0 && l != NOPOS; n++)
-		l = buffer_prev_line (bp, l);
-	for (; n > 0 && l != NOPOS; n--)
-		l = buffer_next_line (bp, l);
-	return l;
-}
-
 /* Move point to the text shown at row `y', column `x' of the current
    window. Returns whether a character is shown there, rather than the
    gutter or the space after a line or after the buffer. */
@@ -438,22 +398,19 @@ move_point_to_cell (size_t y, size_t x)
 		return false;
 	y = MIN (y, cur_wp->eheight > 0 ? cur_wp->eheight - 1 : 0);
 	size_t gutter = cur_wp->gutter_width;
-	size_t goalc = (x > gutter ? x - gutter : 0) + cur_wp->start_column;
-	/* A rendered Markdown line is mapped as it was drawn, before point
-	   gets there and shows it as source. */
-	size_t lo = line_at_row (cur_wp, y), o;
 	bool on_text;
-	if (lo != NOPOS && markdown_cell_offset (cur_wp, lo, goalc, &o, &on_text)) {
-		buffer_goto_offset (cur_bp, o);
-		cur_bp->goalc = buffer_calculate_goalc (cur_bp, o);
-		return x >= gutter && on_text;
+	/* Mapped as the screen was drawn: a rendered Markdown line shows
+	   as source once point gets there. */
+	size_t o = window_cell_offset (cur_wp, y, x > gutter ? x - gutter : 0, &on_text);
+	if (o == NOPOS) {
+		/* After the end of the buffer. */
+		buffer_goto_offset (cur_bp, buffer_length (cur_bp));
+		cur_bp->goalc = buffer_calculate_goalc (cur_bp, buffer_pt (cur_bp));
+		return false;
 	}
-	/* The top line, as redisplay finds it. */
-	size_t line = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
-	bool moved = buffer_move_line (cur_bp, (long) y - (long) MIN (cur_wp->topdelta, line));
-	cur_bp->goalc = goalc;
-	buffer_goto_goalc (cur_bp);
-	return moved && x >= gutter && !buffer_eolp (cur_bp);
+	buffer_goto_offset (cur_bp, o);
+	cur_bp->goalc = buffer_calculate_goalc (cur_bp, o);
+	return x >= gutter && on_text;
 }
 
 /* A press that followed a link leaves its drag to no window. */
@@ -482,47 +439,24 @@ follow_link (size_t y, size_t x, bool on_text)
 static bool
 text_at_cell (Window *wp, size_t y, size_t x, size_t *lo, size_t *i)
 {
-	Buffer *bp = wp->bp;
 	size_t gutter = wp->gutter_width;
+	bool on_text;
 	if (x < gutter)
 		return false;
-	size_t l = line_at_row (wp, y);
-	if (l == NOPOS)
+	size_t o = window_cell_offset (wp, y, x - gutter, &on_text);
+	if (o == NOPOS || !on_text)
 		return false;
-
-	size_t goalc = x - gutter + wp->start_column, o;
-	bool on_text;
-	if (markdown_cell_offset (wp, l, goalc, &o, &on_text)) {
-		*lo = l;
-		*i = o - l;
-		return on_text;
-	}
-	/* As buffer_goto_goalc. */
-	size_t col = 0, t = buffer_tab_width (bp);
-	size_t j = l, end = buffer_end_of_line (bp, l);
-	while (j < end && col < goalc) {
-		size_t len;
-		uint32_t ch = buffer_get_utf8_char (bp, j, &len);
-		size_t w = ch == '\t' ? t - col % t : (size_t) utf8_char_display_width (ch);
-		if (col + w > goalc)
-			break;
-		col += w;
-		j += len;
-	}
-	if (j == end)
-		return false;
-	*lo = l;
-	*i = j - l;
+	*lo = window_screen_row (wp, y)->lo;
+	*i = o - *lo;
 	return true;
 }
 
-/* The column of `wp' at which byte `i' of the line at `lo' is shown. */
+/* The column of `wp' at which byte `i' of the line shown at row `y' is
+   shown. */
 static size_t
-column_of (Window *wp, size_t lo, size_t i)
+column_of (Window *wp, size_t y, size_t i)
 {
-	size_t col = buffer_calculate_goalc (wp->bp, lo + i);
-	col = col > wp->start_column ? col - wp->start_column : 0;
-	return MIN (wp->gutter_width + col, wp->ewidth);
+	return MIN (wp->gutter_width + window_row_column (wp, y, i), wp->ewidth);
 }
 
 /* What a click on a link in `wp' to `target' does, as a hint. */
@@ -575,8 +509,8 @@ link_at (size_t y, size_t x, ScreenLink *link)
 		} else if ((bp->shell == NULL && bp->compilation == NULL) || !references_followable (bp) ||
 			   !reference_line_link_at (bp, lo, i, &span, &target))
 			return false;
-		x0 = column_of (wp, lo, span.start);
-		x1 = column_of (wp, lo, span.end);
+		x0 = column_of (wp, wy, span.start);
+		x1 = column_of (wp, wy, span.end);
 	}
 	link->y = y;
 	link->x0 = leaf->x + x0;
@@ -634,42 +568,13 @@ F_mouse_drag_region (long uniarg, Args *args)
 	return true;
 }
 
-/* Scroll the window under the mouse by `n' lines, forward if positive,
-   moving point only to keep it on the screen. */
+/* Scroll the window under the mouse by `n' lines. */
 static bool
 mwheel_scroll (long n)
 {
 	size_t y, x;
 	WinNode *leaf = mouse_leaf (&y, &x);
-	Window *old = cur_wp;
-	if (leaf != NULL && leaf->wp != cur_wp)
-		window_set_current (leaf->wp);
-
-	Window *wp = cur_wp;
-	if (!shell_char_mode (cur_bp)) {
-		size_t line = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
-		size_t top = line - MIN (wp->topdelta, line);
-		if (n > 0) {
-			size_t last = buffer_offset_to_line (cur_bp, buffer_length (cur_bp));
-			size_t k = MIN ((size_t) n, last - top);
-			if (wp->topdelta >= k)
-				wp->topdelta -= k;
-			else {
-				buffer_move_line (cur_bp, (long) (k - wp->topdelta));
-				wp->topdelta = 0;
-			}
-		} else {
-			wp->topdelta += MIN ((size_t) -n, top);
-			if (wp->eheight > 0 && wp->topdelta >= wp->eheight) {
-				buffer_move_line (cur_bp, -(long) (wp->topdelta - (wp->eheight - 1)));
-				wp->topdelta = wp->eheight - 1;
-			}
-		}
-		wp->lastpointn = buffer_offset_to_line (cur_bp, buffer_pt (cur_bp));
-	}
-
-	if (old != cur_wp)
-		window_set_current (old);
+	window_scroll (leaf != NULL ? leaf->wp : cur_wp, n);
 	return true;
 }
 

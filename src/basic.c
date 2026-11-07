@@ -19,11 +19,21 @@
 
 #include "xzile.h"
 
+/* Move point `n' lines, or screen rows when lines wrap and
+   `line-move-visual' is set. */
+static bool
+move_line (long n)
+{
+	if (cur_wp->bp == cur_bp && window_moves_visually (cur_wp))
+		return window_move_rows (cur_wp, n);
+	return buffer_move_line (cur_bp, n);
+}
+
 static bool
 scroll_down (void)
 {
 	if (!window_top_visible (cur_wp))
-		return buffer_move_line (cur_bp, -(long) cur_wp->eheight);
+		return move_line (-(long) cur_wp->eheight);
 
 	minibuf_error ("Beginning of buffer");
 	return false;
@@ -33,7 +43,7 @@ static bool
 scroll_up (void)
 {
 	if (!window_bottom_visible (cur_wp))
-		return buffer_move_line (cur_bp, (long) cur_wp->eheight);
+		return move_line ((long) cur_wp->eheight);
 
 	minibuf_error ("End of buffer");
 	return false;
@@ -73,14 +83,14 @@ static bool
 F_previous_line (long uniarg, Args *args)
 {
 	(void) args;
-	return buffer_move_line (cur_bp, -uniarg);
+	return move_line (-uniarg);
 }
 
 static bool
 F_next_line (long uniarg, Args *args)
 {
 	(void) args;
-	return buffer_move_line (cur_bp, uniarg);
+	return move_line (uniarg);
 }
 
 static bool

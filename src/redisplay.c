@@ -45,17 +45,6 @@ resize_windows (void)
 	minibuf_refresh ();
 }
 
-void
-recenter (Window *wp)
-{
-	size_t n = buffer_offset_to_line (wp->bp, window_o (wp));
-
-	if (n > wp->eheight / 2)
-		wp->topdelta = wp->eheight / 2;
-	else
-		wp->topdelta = n;
-}
-
 static bool
 F_recenter (long uniarg, Args *args)
 {

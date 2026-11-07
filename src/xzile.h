@@ -772,6 +772,16 @@ typedef struct {
 	size_t n, cap;
 } WinPlaces;
 
+/* A screen row of a window, as redisplay showed it: bytes [start, end)
+   of the line at `lo' (NOPOS past the end of the buffer), the first at
+   display column `col' of the line, and `left' the column of the line
+   at the left of the text (they differ when scrolled sideways); `last'
+   if it is the line's last row. */
+typedef struct {
+	size_t lo, start, end, col, left;
+	bool last;
+} ScreenRow;
+
 struct Window {
 	Window *next;		/* The next window in window list. */
 	unsigned long id;	/* Distinguishes windows reusing an address. */
@@ -789,8 +799,12 @@ struct Window {
 	size_t eheight;
 	size_t xpos;
 	size_t gutter_width;	/* Width of the line-number gutter (0 if disabled). */
+	size_t scroll_bar_width;	/* Right of the text (see scroll-bar-mode). */
 	bool all_displayed;	/* The bottom of the buffer is visible */
 	size_t lastpointn;	/* The last point line number. */
+	size_t lastpointrow;	/* The screen row of that line point was in. */
+	ScreenRow *screen_rows;	/* What redisplay last showed, row by row. */
+	size_t nscreen_rows;
 };
 
 extern Window *cur_wp, *head_wp;
@@ -808,6 +822,7 @@ size_t window_o (const Window *wp);
 bool window_top_visible (Window *wp);
 bool window_bottom_visible (const Window *wp);
 void window_resync (Window *wp);
+void window_scroll (Window *wp, long n);
 void window_set_current (Window *wp);
 void wm_delete (Window *wp);
 void create_scratch_window (void);
@@ -862,6 +877,8 @@ WinNode *find_leaf_for (Window *wp);
 void replace_leaf_with_split (WinNode *leaf, enum SplitKind kind, Window *w1, Window *w2);
 void remove_leaf_and_promote_sibling (WinNode *leaf);
 Window *update_windows_geometry (size_t x, size_t y, size_t w, size_t h);
+/* The columns each window gives its scroll bar (see scroll-bar-mode). */
+extern size_t layout_scroll_bar_width;
 bool resize_window_layout (Window *wp, int delta, bool vertical);
 unsigned long layout_generation (void);
 WinNode *layout_divider_at (size_t y, size_t x);
@@ -872,6 +889,40 @@ bool layout_resize_split (WinNode *split, size_t size);
 size_t get_main_window_height (void);
 void resize_windows (void);
 void recenter (Window *wp);
+
+/* display.c */
+/* A screen row of a line: bytes [start, end) of it, from its display
+   column `col'. */
+typedef struct {
+	size_t start, end, col;
+} DisplayRow;
+/* Break a line of `len' bytes into rows `width' columns wide, at spaces
+   if `word_wrap'; returns how many, and stores the first `max'. */
+size_t display_wrap (const char *s, size_t len, size_t width, size_t tab_width, bool word_wrap,
+		     DisplayRow *rows, size_t max);
+size_t display_row_of (const DisplayRow *rows, size_t n, size_t i);
+bool window_wraps (Window *wp);
+bool window_moves_visually (Window *wp);
+size_t window_text_width (const Window *wp);
+size_t window_line_rows (Window *wp, size_t lo, DisplayRow **rows);
+size_t window_line_nrows (Window *wp, size_t lo);
+size_t window_point_row (Window *wp, size_t *nrows);
+size_t window_rows_above (Window *wp, size_t lo, size_t k, size_t limit);
+size_t window_point_rows_above (Window *wp, size_t limit);
+bool window_move_rows (Window *wp, long n);
+/* Show point `topdelta' rows from the top of `wp', or as far as it can. */
+void window_set_top (Window *wp, size_t topdelta);
+bool window_scroll_position (Window *wp, double *total, double *top);
+/* The width of character `ch' at column `col' of a line, as shown. */
+size_t display_char_width (uint32_t ch, size_t col, size_t tab_width);
+/* Row `y' of `wp' as last shown, or NULL if no line was there. */
+const ScreenRow *window_screen_row (Window *wp, size_t y);
+/* The offset of the text at column `x' of the text of row `y' of `wp',
+   as last shown, and whether a character is there; NOPOS if no line. */
+size_t window_cell_offset (Window *wp, size_t y, size_t x, bool *on_text);
+/* The column of the text of row `y' of `wp' showing byte `i' of its
+   line, clamped to the row. */
+size_t window_row_column (Window *wp, size_t y, size_t i);
 void redisplay_init (void);
 
 /*--------------------------------------------------------------------------
@@ -970,7 +1021,6 @@ typedef struct {
 	bool locations;			/* File mode: M-l asks for another location. */
 	Remote *remote;			/* File mode: the machine listed, or NULL. */
 	const char *notice;		/* Shown on the prompt line, e.g. an error. */
-	const char *const *hints;	/* Key hints, longest first; NULL-terminated. */
 	bool back_key;			/* M-l cancels, as C-g does. */
 	int default_item;		/* Selected with empty input, or -1. */
 	History *history;
@@ -1023,6 +1073,8 @@ void keymap_bind (Binding *map, const char *keystr, const char *func_name);
 void keymap_set_default (Binding *map, const char *func_name);
 void get_key_sequence (KeyVec *keys);
 LispFunc *get_function_by_keys (const KeyVec *keys);
+/* Run command `name' when the mouse event being handled is done with. */
+void run_command_after_click (const char *name);
 Keystroke binding_completion (const char *a);
 bool call_command (LispFunc *f, long uniarg, Args *args);
 void get_and_run_command (void);
@@ -1282,12 +1334,18 @@ const Mode *markdown_highlighter (const Buffer *bp);
 /* Draw the text of the line at `lo' in `wp' at the cursor, `width'
    columns from display column `startcol', if it is shown rendered
    rather than as source; returns false, drawing nothing, if not. */
-bool markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, const Region *r);
+/* Draw row the line at `lo' rendered, from column `startcol' of it: to
+   `endcol', wrapped, or to the edge, truncated. */
+bool markdown_draw_line (Window *wp, size_t lo, size_t width, size_t startcol, size_t endcol, const Region *r,
+			 bool truncate);
 /* For a click on display column `col' (from the start of the line, as
    for `goalc') of the line at `lo' in `wp', as last drawn: if it was
    shown rendered, the offset it shows in `*o', and whether a character
    of the line is there in `*on_text'. */
 bool markdown_cell_offset (Window *wp, size_t lo, size_t col, size_t *o, bool *on_text);
+/* If the line at `lo' is shown rendered, its rows `width' columns
+   wide, broken at spaces; their `start' and `end' are columns. */
+size_t markdown_line_rows (Window *wp, size_t lo, size_t width, DisplayRow **rows);
 void markdown_mode_init (void);
 
 /* bookmark.c */
@@ -1376,6 +1434,17 @@ long regex_search (const Regex *re, const char *text, size_t len, bool forward,
 #define FACE_LINK "link"
 #define FACE_LINK_HOVER "link-hover"
 #define FACE_TOOLTIP "tooltip"
+#define FACE_MODE_LINE_HIGHLIGHT "mode-line-highlight"
+#define FACE_TUI_PANEL "tui-panel"
+#define FACE_TUI_BORDER "tui-border"
+#define FACE_TUI_TITLE "tui-title"
+#define FACE_TUI_MUTED "tui-muted"
+#define FACE_TUI_KEY "tui-key"
+#define FACE_TUI_HOVER "tui-hover"
+#define FACE_TUI_SCROLLBAR_TRACK "tui-scrollbar-track"
+#define FACE_TUI_SCROLLBAR_THUMB "tui-scrollbar-thumb"
+#define FACE_TUI_SCROLLBAR_THUMB_HOVER "tui-scrollbar-thumb-hover"
+#define FACE_TUI_DIVIDER_HOVER "tui-divider-hover"
 #define FACE_MARKDOWN_HEADER_1 "markdown-header-face-1"
 #define FACE_MARKDOWN_HEADER_2 "markdown-header-face-2"
 #define FACE_MARKDOWN_HEADER_3 "markdown-header-face-3"
