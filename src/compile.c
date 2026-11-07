@@ -496,8 +496,11 @@ run_compile (const char *command, const char *dir)
 	c->error_o = NOPOS;
 	bp->compilation = c;
 	last_compilation = bp;
+	/* `dir' may be bp->dir itself, when compiling again. */
+	char *new_dir = xstrdup (dir);
 	free (bp->dir);
-	bp->dir = xstrdup (dir);
+	bp->dir = new_dir;
+	dir = new_dir;
 
 	char when[64];
 	format_now (when, sizeof when);
